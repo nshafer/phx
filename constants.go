@@ -8,6 +8,12 @@ const (
 
 	// defaultHeartbeat is the default time between heartbeats
 	defaultHeartbeat = 5 * time.Second
+
+	// busyWait is the time for goroutines to sleep while waiting. Lower = more CPU. Higher = less responsive
+	busyWait = 100 * time.Millisecond
+
+	// messageQueueLength is the number of messages to queue when not connected before blocking
+	messageQueueLength = 100
 )
 
 func defaultReconnectAfterFunc(tries int) time.Duration {
