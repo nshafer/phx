@@ -2,7 +2,6 @@ package phx
 
 import (
 	"errors"
-	"fmt"
 	"github.com/gorilla/websocket"
 	"net/http"
 	"net/url"
@@ -20,12 +19,14 @@ type Websocket struct {
 	done            chan any
 	close           chan bool
 	reconnect       chan bool
+	closeMsg        chan bool
 	send            chan Message
 	connectionTries int
 	mu              sync.RWMutex
 	started         bool
 	closing         bool
 	reconnecting    bool
+	waitingForClose bool
 }
 
 func NewWebsocket(dialer *websocket.Dialer, handler TransportHandler) *Websocket {
@@ -57,6 +58,15 @@ func (w *Websocket) Disconnect() error {
 	return nil
 }
 
+func (w *Websocket) Reconnect() error {
+	if !w.isStarted() {
+		return errors.New("not connected")
+	}
+
+	w.sendReconnect()
+	return nil
+}
+
 func (w *Websocket) IsConnected() bool {
 	return w.connIsReady()
 }
@@ -75,6 +85,7 @@ func (w *Websocket) startup(endPoint url.URL, requestHeader http.Header) {
 
 	w.done = make(chan any)
 	w.close = make(chan bool)
+	w.closeMsg = make(chan bool)
 	w.reconnect = make(chan bool)
 	w.send = make(chan Message, messageQueueLength)
 
@@ -94,6 +105,7 @@ func (w *Websocket) teardown() {
 	// Tell the goroutines to exit
 	close(w.done)
 	close(w.close)
+	close(w.closeMsg)
 	close(w.reconnect)
 	close(w.send)
 
@@ -112,25 +124,23 @@ func (w *Websocket) dial() error {
 
 	w.setConn(conn)
 	w.setReconnecting(false)
-	w.handler.OnConnOpen()
+	w.handler.onConnOpen()
 
 	return nil
 }
 
 func (w *Websocket) closeConn() {
-	fmt.Println("closeConn")
-	if !w.connIsSet() {
-		return
-	}
+	//fmt.Println("closeConn")
 
-	if w.isClosing() {
+	if w.connIsSet() {
 		// attempt to gracefully close the connection by sending a close websocket message
 		err := w.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 		if err == nil {
 			// Wait for a close message to be received by `connectionReader`, or time out after 5 seconds
+			w.setWaitingForClose(true)
 			select {
-			case <-w.close:
-			case <-time.After(5 * time.Second):
+			case <-w.closeMsg:
+			case <-time.After(3 * time.Second):
 			}
 		}
 	}
@@ -138,13 +148,13 @@ func (w *Websocket) closeConn() {
 	if w.connIsSet() {
 		err := w.conn.Close()
 		if err != nil {
-			w.handler.OnConnError(err)
+			w.handler.onConnError(err)
 		}
 
 		w.setConn(nil)
 	}
 
-	w.handler.OnConnClose()
+	w.handler.onConnClose()
 	w.setClosing(false)
 }
 
@@ -165,8 +175,8 @@ func (w *Websocket) readFromConn(msg *Message) error {
 }
 
 func (w *Websocket) connectionManager() {
-	fmt.Println("connectionManager started")
-	defer fmt.Println("connectionManager stopped")
+	//fmt.Println("connectionManager started")
+	//defer fmt.Println("connectionManager stopped")
 
 	for {
 		// Check if we have been told to finish
@@ -179,9 +189,9 @@ func (w *Websocket) connectionManager() {
 		if !w.isClosing() && !w.connIsSet() {
 			err := w.dial()
 			if err != nil {
-				w.handler.OnConnError(err)
+				w.handler.onConnError(err)
 				w.setReconnecting(true)
-				delay := w.handler.ReconnectAfter(w.connectionTries)
+				delay := w.handler.reconnectAfter(w.connectionTries)
 				w.connectionTries++
 				select {
 				case <-w.done:
@@ -204,8 +214,8 @@ func (w *Websocket) connectionManager() {
 }
 
 func (w *Websocket) connectionWriter() {
-	fmt.Println("connectionWriter started")
-	defer fmt.Println("connectionWriter stopped")
+	//fmt.Println("connectionWriter started")
+	//defer fmt.Println("connectionWriter stopped")
 
 	for {
 		// Check if we have been told to finish
@@ -219,8 +229,6 @@ func (w *Websocket) connectionWriter() {
 			time.Sleep(busyWait)
 			continue
 		}
-
-		//fmt.Println("Ready to write to socket")
 
 		select {
 		case <-w.done:
@@ -237,7 +245,7 @@ func (w *Websocket) connectionWriter() {
 
 			// If there were any errors sending, then tell the connectionManager to reconnect
 			if err != nil {
-				w.handler.OnWriteError(err)
+				w.handler.onWriteError(err)
 				w.sendReconnect()
 				time.Sleep(busyWait)
 				continue
@@ -247,8 +255,8 @@ func (w *Websocket) connectionWriter() {
 }
 
 func (w *Websocket) connectionReader() {
-	fmt.Println("connectionReader started")
-	defer fmt.Println("connectionReader stopped")
+	//fmt.Println("connectionReader started")
+	//defer fmt.Println("connectionReader stopped")
 
 	for {
 		// Check if we have been told to finish
@@ -267,21 +275,19 @@ func (w *Websocket) connectionReader() {
 			continue
 		}
 
-		//fmt.Println("Ready to read from socket")
-
 		// Read the next message from the websocket. This blocks until there is a message or error
 		err := w.readFromConn(&msg)
 
 		// If there were any errors, tell the connectionManager to reconnect
 		if err != nil {
-			fmt.Printf("read error %e %v\n", err, err)
+			//fmt.Printf("read error %e %v\n", err, err)
 			if websocket.IsCloseError(err, 1000) {
-				if w.isClosing() {
+				if w.isWaitingForClose() {
 					// tell the connectionManager that we got the close message
-					w.close <- true
+					w.closeMsg <- true
 				}
 			} else {
-				w.handler.OnReadError(err)
+				w.handler.onReadError(err)
 				w.sendReconnect()
 			}
 
@@ -289,7 +295,7 @@ func (w *Websocket) connectionReader() {
 			continue
 		}
 
-		w.handler.OnConnMessage(msg)
+		w.handler.onConnMessage(msg)
 	}
 }
 
@@ -378,4 +384,18 @@ func (w *Websocket) connIsReady() bool {
 	defer w.mu.RUnlock()
 
 	return w.started && !w.closing && !w.reconnecting && w.conn != nil
+}
+
+func (w *Websocket) setWaitingForClose(waitingForClose bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.waitingForClose = waitingForClose
+}
+
+func (w *Websocket) isWaitingForClose() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	return w.waitingForClose
 }

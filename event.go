@@ -21,4 +21,7 @@ const (
 
 	// LeaveEvent represents leaving a channel and unsubscribing from a topic.
 	LeaveEvent Event = "phx_leave"
+
+	// HeartBeatEvent is a special message for heartbeats
+	HeartBeatEvent Event = "heartbeat"
 )

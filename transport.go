@@ -9,16 +9,17 @@ import (
 type Transport interface {
 	Connect(endPoint url.URL, requestHeader http.Header) error
 	Disconnect() error
+	Reconnect() error
 	IsConnected() bool
 	Send(msg Message)
 }
 
 type TransportHandler interface {
-	OnConnOpen()
-	OnConnClose()
-	OnConnError(error)
-	OnWriteError(error)
-	OnReadError(error)
-	OnConnMessage(Message)
-	ReconnectAfter(int) time.Duration
+	onConnOpen()
+	onConnClose()
+	onConnError(error)
+	onWriteError(error)
+	onReadError(error)
+	onConnMessage(Message)
+	reconnectAfter(int) time.Duration
 }

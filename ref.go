@@ -2,16 +2,20 @@ package phx
 
 import "sync/atomic"
 
+type Ref uint64
+
 type atomicRef struct {
-	ref *uint64
+	ref *Ref
 }
 
 func newAtomicRef() *atomicRef {
 	return &atomicRef{
-		new(uint64),
+		ref: new(Ref),
 	}
 }
 
-func (ic *atomicRef) nextRef() uint64 {
-	return atomic.AddUint64(ic.ref, 1)
+func (ic *atomicRef) nextRef() Ref {
+	ref := (*uint64)(ic.ref)
+	val := atomic.AddUint64(ref, 1)
+	return Ref(val)
 }

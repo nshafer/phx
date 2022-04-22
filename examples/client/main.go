@@ -35,7 +35,7 @@ func main() {
 
 		switch strings.Trim(input, " \t\n") {
 		case "h":
-			fmt.Print("q: quit\nc: connect\nd: disconnect\ns: status\n")
+			fmt.Print("q: quit\nc: connect\nd: disconnect\nr: reconnect\ns: status\n")
 		case "q":
 			return
 		case "c":
@@ -44,6 +44,10 @@ func main() {
 			}
 		case "d":
 			if err := socket.Disconnect(); err != nil {
+				fmt.Println(err)
+			}
+		case "r":
+			if err := socket.Reconnect(); err != nil {
 				fmt.Println(err)
 			}
 		case "s":
