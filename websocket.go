@@ -66,8 +66,6 @@ func (w *Websocket) Send(msg Message) {
 }
 
 func (w *Websocket) startup(endPoint url.URL, requestHeader http.Header) {
-	//fmt.Println("startup", endPoint, requestHeader)
-
 	endPoint.Path = path.Join(endPoint.Path, "websocket")
 
 	w.endPoint = endPoint.String()
@@ -84,8 +82,8 @@ func (w *Websocket) startup(endPoint url.URL, requestHeader http.Header) {
 	w.setClosing(false)
 
 	go w.connectionManager()
-	go w.writer()
-	go w.reader()
+	go w.connectionWriter()
+	go w.connectionReader()
 
 	w.setStarted(true)
 }
@@ -125,20 +123,27 @@ func (w *Websocket) closeConn() {
 		return
 	}
 
-	w.setClosing(true)
-
-	// attempt to gracefully close the connection by sending a close websocket message
-	err := w.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-	if err == nil {
-		time.Sleep(250 * time.Millisecond)
+	if w.isClosing() {
+		// attempt to gracefully close the connection by sending a close websocket message
+		err := w.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+		if err == nil {
+			// Wait for a close message to be received by `connectionReader`, or time out after 5 seconds
+			select {
+			case <-w.close:
+			case <-time.After(5 * time.Second):
+			}
+		}
 	}
 
-	err = w.conn.Close()
-	if err != nil {
-		w.handler.OnConnError(err)
+	if w.connIsSet() {
+		err := w.conn.Close()
+		if err != nil {
+			w.handler.OnConnError(err)
+		}
+
+		w.setConn(nil)
 	}
 
-	w.setConn(nil)
 	w.handler.OnConnClose()
 	w.setClosing(false)
 }
@@ -160,8 +165,8 @@ func (w *Websocket) readFromConn(msg *Message) error {
 }
 
 func (w *Websocket) connectionManager() {
-	//fmt.Println("connectionManager started")
-	//defer fmt.Println("connectionManager stopped")
+	fmt.Println("connectionManager started")
+	defer fmt.Println("connectionManager stopped")
 
 	for {
 		// Check if we have been told to finish
@@ -178,7 +183,10 @@ func (w *Websocket) connectionManager() {
 				w.setReconnecting(true)
 				delay := w.handler.ReconnectAfter(w.connectionTries)
 				w.connectionTries++
-				time.Sleep(delay)
+				select {
+				case <-w.done:
+				case <-time.After(delay):
+				}
 				continue
 			}
 		}
@@ -195,9 +203,9 @@ func (w *Websocket) connectionManager() {
 	}
 }
 
-func (w *Websocket) writer() {
-	//fmt.Println("writer started")
-	//defer fmt.Println("writer stopped")
+func (w *Websocket) connectionWriter() {
+	fmt.Println("connectionWriter started")
+	defer fmt.Println("connectionWriter stopped")
 
 	for {
 		// Check if we have been told to finish
@@ -238,15 +246,15 @@ func (w *Websocket) writer() {
 	}
 }
 
-func (w *Websocket) reader() {
-	//fmt.Println("reader started")
-	//defer fmt.Println("reader stopped")
+func (w *Websocket) connectionReader() {
+	fmt.Println("connectionReader started")
+	defer fmt.Println("connectionReader stopped")
 
 	for {
 		// Check if we have been told to finish
 		select {
 		case <-w.done:
-			//fmt.Println("reader stopping")
+			//fmt.Println("connectionReader stopping")
 			return
 		default:
 		}
@@ -266,8 +274,13 @@ func (w *Websocket) reader() {
 
 		// If there were any errors, tell the connectionManager to reconnect
 		if err != nil {
-			//fmt.Printf("read error %e %v\n", err, err)
-			if !websocket.IsCloseError(err, 1000) {
+			fmt.Printf("read error %e %v\n", err, err)
+			if websocket.IsCloseError(err, 1000) {
+				if w.isClosing() {
+					// tell the connectionManager that we got the close message
+					w.close <- true
+				}
+			} else {
 				w.handler.OnReadError(err)
 				w.sendReconnect()
 			}

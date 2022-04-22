@@ -52,7 +52,12 @@ func (s *Socket) Connect() error {
 }
 
 func (s *Socket) Disconnect() error {
-	s.Transport.Disconnect()
+	err := s.Transport.Disconnect()
+	if err != nil {
+		s.Logger.Println(LogError, "socket", err)
+		return err
+	}
+
 	return nil
 }
 
