@@ -10,15 +10,27 @@ import (
 )
 
 func main() {
-	fmt.Println("client example running, 'h' for help, 'q' to exit")
-
 	if len(os.Args) != 2 {
 		fmt.Println("Usage: go run main.go ws[s]://host[:port]/[path]")
 		os.Exit(1)
 	}
 
+	fmt.Println("client example running, 'h' for help, 'q' to exit")
+
 	socket := phx.NewSocket(os.Args[1])
 	socket.Logger = phx.NewSimpleLogger(phx.LogDebug)
+	socket.OnOpen(func() {
+		fmt.Println("+ connected")
+	})
+	socket.OnClose(func() {
+		fmt.Println("- disconnected")
+	})
+	socket.OnError(func(err error) {
+		fmt.Println("!", err)
+	})
+	socket.OnMessage(func(msg phx.Message) {
+		fmt.Println("=", msg)
+	})
 
 	reader := bufio.NewReader(os.Stdin)
 	for {
@@ -33,7 +45,10 @@ func main() {
 			continue
 		}
 
-		switch strings.Trim(input, " \t\n") {
+		input = strings.Trim(input, " \t\n")
+		cmd, arg, _ := strings.Cut(input, " ")
+
+		switch cmd {
 		case "h":
 			fmt.Print("q: quit\nc: connect\nd: disconnect\nr: reconnect\ns: status\n")
 		case "q":
@@ -52,6 +67,8 @@ func main() {
 			}
 		case "s":
 			fmt.Printf("Connected: %v\n", socket.IsConnected())
+		case "m":
+			socket.Push("none", phx.MessageEvent, arg, 0)
 		default:
 		}
 	}
