@@ -88,6 +88,15 @@ func (s *Socket) IsConnected() bool {
 	return s.Transport != nil && s.Transport.IsConnected()
 }
 
+func (s *Socket) ConnectionState() ConnectionState {
+	if s.Transport != nil {
+		return s.Transport.ConnectionState()
+	} else {
+		return ConnectionClosed
+
+	}
+}
+
 func (s *Socket) Push(topic string, event Event, payload any, joinRef Ref) Ref {
 	ref := s.MakeRef()
 

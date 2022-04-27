@@ -71,6 +71,18 @@ func (w *Websocket) IsConnected() bool {
 	return w.connIsReady()
 }
 
+func (w *Websocket) ConnectionState() ConnectionState {
+	if w.connIsReady() {
+		return ConnectionOpen
+	} else if !w.isStarted() {
+		return ConnectionClosed
+	} else if w.isClosing() {
+		return ConnectionClosing
+	} else {
+		return ConnectionConnecting
+	}
+}
+
 func (w *Websocket) Send(msg Message) {
 	w.send <- msg
 }

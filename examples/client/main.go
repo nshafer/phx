@@ -67,6 +67,7 @@ func main() {
 			}
 		case "s":
 			fmt.Printf("Connected: %v\n", socket.IsConnected())
+			fmt.Printf("ConnectionState: %v\n", socket.ConnectionState())
 		case "m":
 			socket.Push("none", phx.MessageEvent, arg, 0)
 		default:
