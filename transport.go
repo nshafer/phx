@@ -30,7 +30,7 @@ func (s ConnectionState) String() string {
 }
 
 type Transport interface {
-	Connect(endPoint url.URL, requestHeader http.Header) error
+	Connect(endPoint *url.URL, requestHeader http.Header) error
 	Disconnect() error
 	Reconnect() error
 	IsConnected() bool

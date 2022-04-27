@@ -5,19 +5,26 @@ import (
 	"fmt"
 	"github.com/nshafer/phx"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 )
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Println("Usage: go run main.go ws[s]://host[:port]/[path]")
+		fmt.Println("Usage: go run main.go ws[s]://host[:port]/[path][?key=value]")
 		os.Exit(1)
 	}
 
-	fmt.Println("client example running, 'h' for help, 'q' to exit")
+	urlStr := os.Args[1]
+	endPoint, err := url.Parse(urlStr)
+	if err != nil {
+		fmt.Println("Invalid url", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Ready to connect to '%v', 'h' for help, 'q' to exit\n", endPoint)
 
-	socket := phx.NewSocket(os.Args[1])
+	socket := phx.NewSocket(endPoint)
 	socket.Logger = phx.NewSimpleLogger(phx.LogDebug)
 	socket.OnOpen(func() {
 		fmt.Println("+ connected")

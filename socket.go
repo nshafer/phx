@@ -9,8 +9,7 @@ import (
 )
 
 type Socket struct {
-	// implements TransportHandler
-	EndPoint           string
+	EndPoint           *url.URL
 	Params             map[string]string
 	RequestHeader      http.Header
 	Transport          Transport
@@ -32,7 +31,7 @@ type Socket struct {
 	hbRef   Ref
 }
 
-func NewSocket(endPoint string) *Socket {
+func NewSocket(endPoint *url.URL) *Socket {
 	socket := &Socket{
 		EndPoint:           endPoint,
 		Logger:             NewNoopLogger(),
@@ -50,12 +49,7 @@ func NewSocket(endPoint string) *Socket {
 }
 
 func (s *Socket) Connect() error {
-	endPointUrl, err := url.Parse(s.EndPoint)
-	if err != nil {
-		s.Logger.Println(LogError, "socket", err)
-		return err
-	}
-	err = s.Transport.Connect(*endPointUrl, s.RequestHeader)
+	err := s.Transport.Connect(s.EndPoint, s.RequestHeader)
 	if err != nil {
 		s.Logger.Println(LogError, "socket", err)
 		return err
@@ -170,9 +164,7 @@ func (s *Socket) Off(ref Ref) {
 	}
 }
 
-/*
- * TransportHandler callback methods
- */
+// implements TransportHandler
 
 func (s *Socket) reconnectAfter(tries int) time.Duration {
 	return s.ReconnectAfterFunc(tries)

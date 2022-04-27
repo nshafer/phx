@@ -14,7 +14,7 @@ type Websocket struct {
 	dialer          *websocket.Dialer
 	handler         TransportHandler
 	conn            *websocket.Conn
-	endPoint        string
+	endPoint        *url.URL
 	requestHeader   http.Header
 	done            chan any
 	close           chan bool
@@ -36,9 +36,27 @@ func NewWebsocket(dialer *websocket.Dialer, handler TransportHandler) *Websocket
 	}
 }
 
-func (w *Websocket) Connect(endPoint url.URL, requestHeader http.Header) error {
+// implements Transport
+
+func (w *Websocket) Connect(endPoint *url.URL, requestHeader http.Header) error {
 	if w.isStarted() {
 		return errors.New("connect was already called")
+	}
+
+	if endPoint.Scheme == "" {
+		if endPoint.Port() == "443" {
+			endPoint.Scheme = "wss"
+		} else {
+			endPoint.Scheme = "ws"
+		}
+	} else if endPoint.Scheme == "http" {
+		endPoint.Scheme = "ws"
+	} else if endPoint.Scheme == "https" {
+		endPoint.Scheme = "wss"
+	}
+
+	if endPoint.Scheme != "ws" && endPoint.Scheme != "wss" {
+		return errors.New("invalid scheme for websocket transport, must be 'ws://' or 'wss://'")
 	}
 
 	w.startup(endPoint, requestHeader)
@@ -87,10 +105,10 @@ func (w *Websocket) Send(msg Message) {
 	w.send <- msg
 }
 
-func (w *Websocket) startup(endPoint url.URL, requestHeader http.Header) {
+func (w *Websocket) startup(endPoint *url.URL, requestHeader http.Header) {
 	endPoint.Path = path.Join(endPoint.Path, "websocket")
 
-	w.endPoint = endPoint.String()
+	w.endPoint = endPoint
 	w.requestHeader = requestHeader
 
 	w.connectionTries = 0
@@ -127,7 +145,7 @@ func (w *Websocket) teardown() {
 }
 
 func (w *Websocket) dial() error {
-	conn, _, err := w.dialer.Dial(w.endPoint, w.requestHeader)
+	conn, _, err := w.dialer.Dial(w.endPoint.String(), w.requestHeader)
 	if err != nil {
 		return err
 	}
