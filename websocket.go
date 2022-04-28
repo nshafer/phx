@@ -43,23 +43,31 @@ func (w *Websocket) Connect(endPoint *url.URL, requestHeader http.Header) error 
 		return errors.New("connect was already called")
 	}
 
-	if endPoint.Scheme == "" {
-		if endPoint.Port() == "443" {
-			endPoint.Scheme = "wss"
+	// Copy the passed in endpoint so we can modify it
+	newEndpoint := *endPoint
+
+	newEndpoint.Path = path.Join(newEndpoint.Path, "websocket")
+
+	if newEndpoint.Scheme == "" {
+		if newEndpoint.Port() == "443" {
+			newEndpoint.Scheme = "wss"
 		} else {
-			endPoint.Scheme = "ws"
+			newEndpoint.Scheme = "ws"
 		}
-	} else if endPoint.Scheme == "http" {
-		endPoint.Scheme = "ws"
-	} else if endPoint.Scheme == "https" {
-		endPoint.Scheme = "wss"
+	} else if newEndpoint.Scheme == "http" {
+		newEndpoint.Scheme = "ws"
+	} else if newEndpoint.Scheme == "https" {
+		newEndpoint.Scheme = "wss"
 	}
 
-	if endPoint.Scheme != "ws" && endPoint.Scheme != "wss" {
+	if newEndpoint.Scheme != "ws" && newEndpoint.Scheme != "wss" {
 		return errors.New("invalid scheme for websocket transport, must be 'ws://' or 'wss://'")
 	}
 
-	w.startup(endPoint, requestHeader)
+	w.endPoint = &newEndpoint
+	w.requestHeader = requestHeader
+
+	w.startup()
 	return nil
 }
 
@@ -101,16 +109,20 @@ func (w *Websocket) ConnectionState() ConnectionState {
 	}
 }
 
-func (w *Websocket) Send(msg Message) {
+func (w *Websocket) Send(msg Message) error {
+	if w.isClosing() {
+		return errors.New("cannot Send when closing connection")
+	}
+
+	if !w.isStarted() {
+		return errors.New("cannot Send when not connected or connecting")
+	}
+
 	w.send <- msg
+	return nil
 }
 
-func (w *Websocket) startup(endPoint *url.URL, requestHeader http.Header) {
-	endPoint.Path = path.Join(endPoint.Path, "websocket")
-
-	w.endPoint = endPoint
-	w.requestHeader = requestHeader
-
+func (w *Websocket) startup() {
 	w.connectionTries = 0
 
 	w.done = make(chan any)
@@ -311,11 +323,9 @@ func (w *Websocket) connectionReader() {
 		// If there were any errors, tell the connectionManager to reconnect
 		if err != nil {
 			//fmt.Printf("read error %e %v\n", err, err)
-			if websocket.IsCloseError(err, 1000) {
-				if w.isWaitingForClose() {
-					// tell the connectionManager that we got the close message
-					w.closeMsg <- true
-				}
+			if websocket.IsCloseError(err, 1000) && w.isWaitingForClose() {
+				// tell the connectionManager that we got the close message
+				w.closeMsg <- true
 			} else {
 				w.handler.onReadError(err)
 				w.sendReconnect()
