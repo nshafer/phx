@@ -8,25 +8,31 @@ import (
 	"time"
 )
 
+// quick toggle while debugging
+const startHeartbeat = true
+
 type Socket struct {
 	EndPoint           *url.URL
-	Params             map[string]string
 	RequestHeader      http.Header
 	Transport          Transport
 	Logger             Logger
 	ConnectTimeout     time.Duration
 	ReconnectAfterFunc func(tries int) time.Duration
 	HeartbeatInterval  time.Duration
+	Serializer         Serializer
 
 	// miscellaneous private members
-	ref              *atomicRef
+	refGenerator     *atomicRef
 	openCallbacks    map[Ref]func()
 	closeCallbacks   map[Ref]func()
 	errorCallbacks   map[Ref]func(error)
 	messageCallbacks map[Ref]func(Message)
 
+	// Channel related state
+	channels []*Channel
+
 	// heartbeat related state
-	hbMsg   chan Message
+	hbMsg   chan *Message
 	hbClose chan any
 	hbRef   Ref
 }
@@ -38,17 +44,24 @@ func NewSocket(endPoint *url.URL) *Socket {
 		ConnectTimeout:     defaultConnectTimeout,
 		ReconnectAfterFunc: defaultReconnectAfterFunc,
 		HeartbeatInterval:  defaultHeartbeatInterval,
-		ref:                newAtomicRef(),
+		Serializer:         NewJSONSerializerV2(),
+		refGenerator:       newAtomicRef(),
 		openCallbacks:      make(map[Ref]func()),
 		closeCallbacks:     make(map[Ref]func()),
 		errorCallbacks:     make(map[Ref]func(error)),
 		messageCallbacks:   make(map[Ref]func(Message)),
+		channels:           make([]*Channel, 0),
 	}
 	socket.Transport = NewWebsocket(websocket.DefaultDialer, socket)
 	return socket
 }
 
 func (s *Socket) Connect() error {
+	// Add the 'vsn' query parameter to the connection url
+	q := s.EndPoint.Query()
+	q.Set("vsn", s.Serializer.vsn())
+	s.EndPoint.RawQuery = q.Encode()
+
 	err := s.Transport.Connect(s.EndPoint, s.RequestHeader)
 	if err != nil {
 		s.Logger.Println(LogError, "socket", err)
@@ -82,6 +95,11 @@ func (s *Socket) IsConnected() bool {
 	return s.Transport != nil && s.Transport.IsConnected()
 }
 
+func (s *Socket) IsConnectedOrConnecting() bool {
+	return s.Transport != nil &&
+		(s.Transport.ConnectionState() == ConnectionConnecting || s.Transport.ConnectionState() == ConnectionOpen)
+}
+
 func (s *Socket) ConnectionState() ConnectionState {
 	if s.Transport != nil {
 		return s.Transport.ConnectionState()
@@ -91,10 +109,10 @@ func (s *Socket) ConnectionState() ConnectionState {
 	}
 }
 
-func (s *Socket) Push(topic string, event Event, payload any, joinRef Ref) Ref {
+func (s *Socket) Push(topic string, event Event, payload any, joinRef Ref) (Ref, error) {
 	ref := s.MakeRef()
 
-	s.PushMessage(Message{
+	err := s.PushMessage(Message{
 		Topic:   topic,
 		Event:   event,
 		Payload: payload,
@@ -102,16 +120,26 @@ func (s *Socket) Push(topic string, event Event, payload any, joinRef Ref) Ref {
 		JoinRef: joinRef,
 	})
 
-	return ref
+	return ref, err
 }
 
-func (s *Socket) PushMessage(msg Message) {
-	s.Logger.Printf(LogDebug, "push", "Sending message %+v", msg)
-	s.Transport.Send(msg)
+func (s *Socket) PushMessage(msg Message) error {
+	data, err := s.Serializer.encode(&msg)
+	if err != nil {
+		return err
+	}
+
+	err = s.Transport.Send(data)
+	if err != nil {
+		return err
+	}
+
+	s.Logger.Printf(LogDebug, "push", "Sent message %+v", msg)
+	return nil
 }
 
 func (s *Socket) MakeRef() Ref {
-	return s.ref.nextRef()
+	return s.refGenerator.nextRef()
 }
 
 func (s *Socket) OnOpen(callback func()) Ref {
@@ -164,6 +192,12 @@ func (s *Socket) Off(ref Ref) {
 	}
 }
 
+func (s *Socket) Channel(topic string, params map[string]string) *Channel {
+	channel := NewChannel(topic, params, s)
+	s.channels = append(s.channels, channel)
+	return channel
+}
+
 // implements TransportHandler
 
 func (s *Socket) reconnectAfter(tries int) time.Duration {
@@ -179,7 +213,7 @@ func (s *Socket) onConnOpen() {
 }
 
 func (s *Socket) onConnClose() {
-	s.Logger.Printf(LogInfo, "transport", "Disconnected from %v", s.EndPoint)
+	s.Logger.Printf(LogInfo, "socket", "Disconnected from %v", s.EndPoint)
 	s.stopHeartbeat()
 	for _, cb := range s.closeCallbacks {
 		cb()
@@ -193,25 +227,31 @@ func (s *Socket) callErrorCallbacks(err error) {
 }
 
 func (s *Socket) onConnError(err error) {
-	s.Logger.Printf(LogError, "transport", "Connection error: %s", err)
+	s.Logger.Printf(LogError, "socket", "Connection error: %s", err)
 	s.callErrorCallbacks(err)
 }
 
 func (s *Socket) onWriteError(err error) {
-	s.Logger.Printf(LogError, "transport", "Write error: %s", err)
+	s.Logger.Printf(LogError, "socket", "Write error: %s", err)
 	s.callErrorCallbacks(err)
 }
 
 func (s *Socket) onReadError(err error) {
 	// Don't log errors when the connection was closed
 	if !strings.Contains(err.Error(), "use of closed network connection") {
-		s.Logger.Printf(LogError, "transport", "Read error: %s", err)
+		s.Logger.Printf(LogError, "socket", "Read error: %s", err)
 		s.callErrorCallbacks(err)
 	}
 }
 
-func (s *Socket) onConnMessage(msg Message) {
-	s.Logger.Printf(LogDebug, "transport", "Received message: %+v", msg)
+func (s *Socket) onConnMessage(data []byte) {
+	msg, err := s.Serializer.decode(data)
+	if err != nil {
+		s.Logger.Println(LogError, "socket", "could not decode data to Message:", err)
+		return
+	}
+
+	s.Logger.Printf(LogDebug, "socket", "Received message: %+v", msg)
 
 	if msg.Topic == "phoenix" && msg.Ref == s.hbRef {
 		// Send this message to the heartbeat goroutine
@@ -220,7 +260,11 @@ func (s *Socket) onConnMessage(msg Message) {
 	}
 
 	for _, cb := range s.messageCallbacks {
-		cb(msg)
+		cb(*msg)
+	}
+
+	for _, channel := range s.channels {
+		channel.process(msg)
 	}
 }
 
@@ -229,8 +273,10 @@ func (s *Socket) onConnMessage(msg Message) {
  */
 func (s *Socket) startHeartbeat() {
 	s.hbClose = make(chan any)
-	s.hbMsg = make(chan Message)
-	go s.heartbeat()
+	s.hbMsg = make(chan *Message)
+	if startHeartbeat {
+		go s.heartbeat()
+	}
 }
 
 func (s *Socket) stopHeartbeat() {
@@ -265,7 +311,10 @@ func (s *Socket) heartbeat() {
 			if s.hbRef == 0 {
 				s.hbRef = s.MakeRef()
 				s.Logger.Println(LogDebug, "heartbeat", "Sending heartbeat", s.hbRef)
-				s.PushMessage(Message{Topic: "phoenix", Event: HeartBeatEvent, Payload: nil, Ref: s.hbRef})
+				err := s.PushMessage(Message{Topic: "phoenix", Event: HeartBeatEvent, Payload: nil, Ref: s.hbRef})
+				if err != nil {
+					s.Logger.Println(LogError, "heartbeat", "Error when sending heartbeat", err)
+				}
 			} else {
 				s.Logger.Println(LogDebug, "heartbeat", "heartbeat timeout")
 				_ = s.Transport.Reconnect()

@@ -1,21 +1,43 @@
 package phx
 
-import "sync/atomic"
+import (
+	"fmt"
+	"strconv"
+	"sync/atomic"
+)
 
 type Ref uint64
 
+func ParseRef(ref any) (Ref, error) {
+	if ref == nil {
+		return Ref(0), nil
+	}
+	switch v := ref.(type) {
+	case string:
+		if ref == "" {
+			return 0, nil
+		}
+		refUint, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		return Ref(refUint), nil
+	case uint64:
+		return Ref(v), nil
+	}
+	return 0, fmt.Errorf("cannot convert %#v to Ref", ref)
+}
+
 type atomicRef struct {
-	ref *Ref
+	ref *uint64
 }
 
 func newAtomicRef() *atomicRef {
 	return &atomicRef{
-		ref: new(Ref),
+		ref: new(uint64),
 	}
 }
 
 func (ic *atomicRef) nextRef() Ref {
-	ref := (*uint64)(ic.ref)
-	val := atomic.AddUint64(ref, 1)
-	return Ref(val)
+	return Ref(atomic.AddUint64(ic.ref, 1))
 }

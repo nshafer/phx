@@ -39,6 +39,8 @@ func main() {
 		fmt.Println("=", msg)
 	})
 
+	var channel *phx.Channel
+
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		fmt.Print("> ")
@@ -57,7 +59,7 @@ func main() {
 
 		switch cmd {
 		case "h":
-			fmt.Print("q: quit\nc: connect\nd: disconnect\nr: reconnect\ns: status\n")
+			usage()
 		case "q":
 			return
 		case "c":
@@ -74,10 +76,67 @@ func main() {
 			}
 		case "s":
 			fmt.Printf("Connected: %v\n", socket.IsConnected())
-			fmt.Printf("ConnectionState: %v\n", socket.ConnectionState())
-		case "m":
-			socket.Push("none", phx.MessageEvent, arg, 0)
+			fmt.Printf("Connection: %v\n", socket.ConnectionState())
+			if channel != nil {
+				fmt.Printf("Channel: %v\n", channel.State())
+			} else {
+				fmt.Println("Channel: uninitialized")
+			}
+		case "p":
+			event, payload, _ := strings.Cut(arg, " ")
+			if channel != nil && channel.IsJoined() {
+				p, err := channel.Push(phx.Event(event), payload)
+				if err != nil {
+					fmt.Println(err)
+					continue
+				}
+				p.Receive("ok", func(response any) {
+					fmt.Println("Push response:", response)
+				})
+				p.Receive("error", func(response any) {
+					fmt.Println("Push error:", response)
+				})
+			} else {
+				fmt.Println("join a channel first")
+			}
+		case "j":
+			topic, paramStr, _ := strings.Cut(arg, " ")
+			if topic == "" {
+				usage()
+				continue
+			}
+			paramPairs := strings.Split(paramStr, ",")
+			params := make(map[string]string)
+			for _, pair := range paramPairs {
+				key, value, found := strings.Cut(pair, "=")
+				if found {
+					params[key] = value
+				}
+			}
+			fmt.Printf("Joining %v with %v\n", topic, params)
+			channel = socket.Channel(topic, params)
+			channel.On(phx.ReplyEvent, func(payload any) {
+				fmt.Println("->", payload)
+			})
+			join, err := channel.Join()
+			join.Receive("ok", func(response any) {
+				fmt.Println("Connected", response)
+				if response == "foobarbaz" {
+					fmt.Println("Authenticated!")
+				}
+			})
+			if err != nil {
+				fmt.Println(err)
+				continue
+			} else {
+				fmt.Println("JoinPush", join)
+			}
 		default:
 		}
 	}
+}
+
+func usage() {
+	fmt.Print("q: quit\nc: connect\nd: disconnect\nr: reconnect\ns: status\n")
+	fmt.Print("j topic [key=value[,...]]\np event [payload]\n")
 }

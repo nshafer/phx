@@ -2,6 +2,7 @@ package phx
 
 import (
 	"errors"
+	"fmt"
 	"github.com/gorilla/websocket"
 	"net/http"
 	"net/url"
@@ -20,7 +21,7 @@ type Websocket struct {
 	close           chan bool
 	reconnect       chan bool
 	closeMsg        chan bool
-	send            chan Message
+	send            chan []byte
 	connectionTries int
 	mu              sync.RWMutex
 	started         bool
@@ -109,7 +110,7 @@ func (w *Websocket) ConnectionState() ConnectionState {
 	}
 }
 
-func (w *Websocket) Send(msg Message) error {
+func (w *Websocket) Send(msg []byte) error {
 	if w.isClosing() {
 		return errors.New("cannot Send when closing connection")
 	}
@@ -129,7 +130,7 @@ func (w *Websocket) startup() {
 	w.close = make(chan bool)
 	w.closeMsg = make(chan bool)
 	w.reconnect = make(chan bool)
-	w.send = make(chan Message, messageQueueLength)
+	w.send = make(chan []byte, messageQueueLength)
 
 	w.setReconnecting(false)
 	w.setClosing(false)
@@ -200,20 +201,28 @@ func (w *Websocket) closeConn() {
 	w.setClosing(false)
 }
 
-func (w *Websocket) writeToConn(msg *Message) error {
+func (w *Websocket) writeToConn(data []byte) error {
 	if !w.connIsReady() {
 		return errors.New("connection is not open")
 	}
 
-	return w.conn.WriteJSON(msg)
+	return w.conn.WriteMessage(websocket.TextMessage, data)
 }
 
-func (w *Websocket) readFromConn(msg *Message) error {
+func (w *Websocket) readFromConn() ([]byte, error) {
 	if !w.connIsReady() {
-		return errors.New("connection is not open")
+		return nil, errors.New("connection is not open")
 	}
 
-	return w.conn.ReadJSON(msg)
+	messageType, data, err := w.conn.ReadMessage()
+	if err != nil {
+		return nil, err
+	}
+	if messageType != websocket.TextMessage {
+		return nil, errors.New(fmt.Sprint("Got unsupported websocket message type", messageType))
+	}
+
+	return data, nil
 }
 
 func (w *Websocket) connectionManager() {
@@ -275,7 +284,7 @@ func (w *Websocket) connectionWriter() {
 		select {
 		case <-w.done:
 			return
-		case msg := <-w.send:
+		case data := <-w.send:
 			// If there is a message to send, but we're not connected, then wait until we are.
 			if !w.connIsReady() {
 				time.Sleep(busyWait)
@@ -283,7 +292,7 @@ func (w *Websocket) connectionWriter() {
 			}
 
 			// Send the message
-			err := w.writeToConn(&msg)
+			err := w.writeToConn(data)
 
 			// If there were any errors sending, then tell the connectionManager to reconnect
 			if err != nil {
@@ -309,8 +318,6 @@ func (w *Websocket) connectionReader() {
 		default:
 		}
 
-		var msg Message
-
 		// Wait until we're connected
 		if !w.connIsReady() {
 			time.Sleep(busyWait)
@@ -318,7 +325,7 @@ func (w *Websocket) connectionReader() {
 		}
 
 		// Read the next message from the websocket. This blocks until there is a message or error
-		err := w.readFromConn(&msg)
+		data, err := w.readFromConn()
 
 		// If there were any errors, tell the connectionManager to reconnect
 		if err != nil {
@@ -335,7 +342,7 @@ func (w *Websocket) connectionReader() {
 			continue
 		}
 
-		w.handler.onConnMessage(msg)
+		w.handler.onConnMessage(data)
 	}
 }
 

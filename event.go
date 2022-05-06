@@ -1,5 +1,7 @@
 package phx
 
+import "fmt"
+
 // Event represents a phoenix channel event for a message.
 type Event string
 
@@ -25,3 +27,23 @@ const (
 	// HeartBeatEvent is a special message for heartbeats
 	HeartBeatEvent Event = "heartbeat"
 )
+
+func ParseEvent(eventStr string) (Event, error) {
+	switch eventStr {
+	case "phx_message":
+		return MessageEvent, nil
+	case "phx_join":
+		return JoinEvent, nil
+	case "phx_close":
+		return CloseEvent, nil
+	case "phx_error":
+		return ErrorEvent, nil
+	case "phx_reply":
+		return ReplyEvent, nil
+	case "phx_leave":
+		return LeaveEvent, nil
+	case "heartbeat":
+		return HeartBeatEvent, nil
+	}
+	return "", fmt.Errorf("invalid event string")
+}
