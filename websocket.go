@@ -11,12 +11,14 @@ import (
 	"time"
 )
 
+// Websocket is a Transport that connects to the server via Websockets.
 type Websocket struct {
-	dialer          *websocket.Dialer
-	handler         TransportHandler
+	Dialer          *websocket.Dialer
+	Handler         TransportHandler
 	conn            *websocket.Conn
 	endPoint        *url.URL
 	requestHeader   http.Header
+	connectTimeout  time.Duration
 	done            chan any
 	close           chan bool
 	reconnect       chan bool
@@ -30,16 +32,16 @@ type Websocket struct {
 	waitingForClose bool
 }
 
-func NewWebsocket(dialer *websocket.Dialer, handler TransportHandler) *Websocket {
+func NewWebsocket(handler TransportHandler) *Websocket {
 	return &Websocket{
-		dialer:  dialer,
-		handler: handler,
+		Dialer:  websocket.DefaultDialer,
+		Handler: handler,
 	}
 }
 
 // implements Transport
 
-func (w *Websocket) Connect(endPoint *url.URL, requestHeader http.Header) error {
+func (w *Websocket) Connect(endPoint *url.URL, requestHeader http.Header, connectTimeout time.Duration) error {
 	if w.isStarted() {
 		return errors.New("connect was already called")
 	}
@@ -67,6 +69,7 @@ func (w *Websocket) Connect(endPoint *url.URL, requestHeader http.Header) error 
 
 	w.endPoint = &newEndpoint
 	w.requestHeader = requestHeader
+	w.connectTimeout = connectTimeout
 
 	w.startup()
 	return nil
@@ -80,7 +83,7 @@ func (w *Websocket) Disconnect() error {
 	if w.connIsSet() {
 		w.sendClose()
 	} else {
-		w.teardown()
+		w.shutdown()
 	}
 	return nil
 }
@@ -142,8 +145,8 @@ func (w *Websocket) startup() {
 	w.setStarted(true)
 }
 
-func (w *Websocket) teardown() {
-	//fmt.Println("teardown")
+func (w *Websocket) shutdown() {
+	//fmt.Println("shutdown")
 
 	// Tell the goroutines to exit
 	close(w.done)
@@ -158,7 +161,8 @@ func (w *Websocket) teardown() {
 }
 
 func (w *Websocket) dial() error {
-	conn, _, err := w.dialer.Dial(w.endPoint.String(), w.requestHeader)
+	w.Dialer.HandshakeTimeout = w.connectTimeout
+	conn, _, err := w.Dialer.Dial(w.endPoint.String(), w.requestHeader)
 	if err != nil {
 		return err
 	}
@@ -167,7 +171,7 @@ func (w *Websocket) dial() error {
 
 	w.setConn(conn)
 	w.setReconnecting(false)
-	w.handler.onConnOpen()
+	w.Handler.onConnOpen()
 
 	return nil
 }
@@ -191,13 +195,13 @@ func (w *Websocket) closeConn() {
 	if w.connIsSet() {
 		err := w.conn.Close()
 		if err != nil {
-			w.handler.onConnError(err)
+			w.Handler.onConnError(err)
 		}
 
 		w.setConn(nil)
 	}
 
-	w.handler.onConnClose()
+	w.Handler.onConnClose()
 	w.setClosing(false)
 }
 
@@ -240,9 +244,9 @@ func (w *Websocket) connectionManager() {
 		if !w.isClosing() && !w.connIsSet() {
 			err := w.dial()
 			if err != nil {
-				w.handler.onConnError(err)
+				w.Handler.onConnError(err)
 				w.setReconnecting(true)
-				delay := w.handler.reconnectAfter(w.connectionTries)
+				delay := w.Handler.reconnectAfter(w.connectionTries)
 				w.connectionTries++
 				select {
 				case <-w.done:
@@ -257,7 +261,7 @@ func (w *Websocket) connectionManager() {
 			return
 		case <-w.close:
 			w.closeConn()
-			w.teardown()
+			w.shutdown()
 		case <-w.reconnect:
 			w.closeConn()
 		}
@@ -296,7 +300,7 @@ func (w *Websocket) connectionWriter() {
 
 			// If there were any errors sending, then tell the connectionManager to reconnect
 			if err != nil {
-				w.handler.onWriteError(err)
+				w.Handler.onWriteError(err)
 				w.sendReconnect()
 				time.Sleep(busyWait)
 				continue
@@ -334,7 +338,7 @@ func (w *Websocket) connectionReader() {
 				// tell the connectionManager that we got the close message
 				w.closeMsg <- true
 			} else {
-				w.handler.onReadError(err)
+				w.Handler.onReadError(err)
 				w.sendReconnect()
 			}
 
@@ -342,7 +346,7 @@ func (w *Websocket) connectionReader() {
 			continue
 		}
 
-		w.handler.onConnMessage(data)
+		w.Handler.onConnMessage(data)
 	}
 }
 

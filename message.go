@@ -7,10 +7,22 @@ import (
 
 // Message is a message sent or received via the socket after encoding/decoding
 type Message struct {
+	// JoinRef is the unique Ref sent when a JoinEvent is sent to join a channel. JoinRef can also be though of as
+	// a Channel ref. If present, this message is tied to the given instance of a Channel.
 	JoinRef Ref
-	Ref     Ref
-	Topic   string
-	Event   Event
+
+	// Ref is the unique Ref for a given message. When sending a new Message, a Ref should be generated. When a reply
+	// is sent back from the server, it will have Ref set to match the Message it is a reply to.
+	Ref Ref
+
+	// Topic is the Channel topic this message is in relation to, as defined on the server side.
+	Topic string
+
+	// Event is a string description of what this message is about, and can be set to anything the user desires.
+	// Some Events are reserved for specific protocol messages as defined in event.go.
+	Event string
+
+	// Payload is any arbitrary data attached to the message.
 	Payload any
 }
 
@@ -42,6 +54,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// JSONMessage is a JSON representation of a Message
 type JSONMessage struct {
 	JoinRef string `json:"join_ref,omitempty"`
 	Ref     string `json:"ref"`
@@ -54,7 +67,7 @@ func NewJSONMessage(msg Message) *JSONMessage {
 	jm := &JSONMessage{
 		Ref:     strconv.FormatUint(uint64(msg.Ref), 10),
 		Topic:   msg.Topic,
-		Event:   string(msg.Event),
+		Event:   msg.Event,
 		Payload: msg.Payload,
 	}
 	if msg.JoinRef != 0 {
@@ -75,16 +88,11 @@ func (jm *JSONMessage) Message() (*Message, error) {
 		return nil, err
 	}
 
-	event, err := ParseEvent(jm.Event)
-	if err != nil {
-		return nil, err
-	}
-
 	msg := Message{
 		JoinRef: joinRef,
 		Ref:     ref,
 		Topic:   jm.Topic,
-		Event:   event,
+		Event:   jm.Event,
 		Payload: jm.Payload,
 	}
 

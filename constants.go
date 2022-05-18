@@ -6,9 +6,6 @@ const (
 	// defaultConnectTimeout is the default handshake timeout
 	defaultConnectTimeout = 10 * time.Second
 
-	// defaultJoinTimeout is the default timeout when joining a channel
-	defaultJoinTimeout = 10 * time.Second
-
 	// defaultPushTimeout is the default timeout when waiting for a reply from a pushed message
 	defaultPushTimeout = 10 * time.Second
 
@@ -22,12 +19,22 @@ const (
 	messageQueueLength = 1000
 )
 
+// TODO: make these 1-based instead of 0-based
 func defaultReconnectAfterFunc(tries int) time.Duration {
 	schedule := []time.Duration{10, 50, 100, 150, 200, 250, 500, 1000, 2000}
 	if tries >= 0 && tries < len(schedule) {
 		return schedule[tries] * time.Millisecond
 	} else {
 		return 5000 * time.Millisecond
+	}
+}
+
+func defaultRejoinAfterFunc(tries int) time.Duration {
+	schedule := []time.Duration{1000, 2000, 5000}
+	if tries >= 0 && tries < len(schedule) {
+		return schedule[tries] * time.Millisecond
+	} else {
+		return 10000 * time.Millisecond
 	}
 }
 
@@ -62,6 +69,7 @@ const (
 	ChannelJoined
 	ChannelJoining
 	ChannelLeaving
+	ChannelRemoved
 )
 
 func (c ChannelState) String() string {

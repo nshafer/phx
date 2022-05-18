@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 )
 
+// A Serializer describes the required interface for serializers
 type Serializer interface {
 	vsn() string
 	encode(*Message) ([]byte, error)

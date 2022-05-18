@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 )
 
+// Ref is a unique reference integer that is atomically incremented and will wrap at 64 bits + 1
 type Ref uint64
 
 func ParseRef(ref any) (Ref, error) {

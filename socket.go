@@ -1,7 +1,6 @@
 package phx
 
 import (
-	"github.com/gorilla/websocket"
 	"net/http"
 	"net/url"
 	"strings"
@@ -11,15 +10,33 @@ import (
 // quick toggle while debugging
 const startHeartbeat = true
 
+// A Socket represents a connection to the server via the given Transport. Many Channels can be connected over a single
+// Socket.
 type Socket struct {
-	EndPoint           *url.URL
-	RequestHeader      http.Header
-	Transport          Transport
-	Logger             Logger
-	ConnectTimeout     time.Duration
+	// Endpoint is the URL to connect to. Include parameters here.
+	EndPoint *url.URL
+
+	// RequestHeader is an http.Header map to send in the initial connection.
+	RequestHeader http.Header
+
+	// Transport is the main transport mechanism to use to connect to the server. Only Websocket is implemented currently.
+	Transport Transport
+
+	// Specify a logger for Errors, Warnings, Info and Debug messages. Defaults to phx.NoopLogger.
+	Logger Logger
+
+	// Timeout for initial handshake with server.
+	ConnectTimeout time.Duration
+
+	// ReconnectAfterFunc is a function that returns the time to delay reconnections based on the given tries
 	ReconnectAfterFunc func(tries int) time.Duration
-	HeartbeatInterval  time.Duration
-	Serializer         Serializer
+
+	// HeartbeatInterval is the duration between heartbeats sent to the server to keep the connection alive.
+	HeartbeatInterval time.Duration
+
+	// Serializer encodes/decodes messages to/from the server. Must work with a Serializer on the server.
+	// Defaults to JSONSerializerV2
+	Serializer Serializer
 
 	// miscellaneous private members
 	refGenerator     *atomicRef
@@ -27,9 +44,7 @@ type Socket struct {
 	closeCallbacks   map[Ref]func()
 	errorCallbacks   map[Ref]func(error)
 	messageCallbacks map[Ref]func(Message)
-
-	// Channel related state
-	channels []*Channel
+	channels         map[string]*Channel
 
 	// heartbeat related state
 	hbMsg   chan *Message
@@ -37,6 +52,10 @@ type Socket struct {
 	hbRef   Ref
 }
 
+// NewSocket creates a Socket that connects to the given endPoint using the default websocket Transport.
+// After creating the socket, several options can be set, such as Transport, Logger, Serializer and timeouts.
+//
+// If a custom websocket.Dialer is needed, such as to set up a Proxy, then create a custom WebSocket
 func NewSocket(endPoint *url.URL) *Socket {
 	socket := &Socket{
 		EndPoint:           endPoint,
@@ -50,19 +69,22 @@ func NewSocket(endPoint *url.URL) *Socket {
 		closeCallbacks:     make(map[Ref]func()),
 		errorCallbacks:     make(map[Ref]func(error)),
 		messageCallbacks:   make(map[Ref]func(Message)),
-		channels:           make([]*Channel, 0),
+		channels:           make(map[string]*Channel),
 	}
-	socket.Transport = NewWebsocket(websocket.DefaultDialer, socket)
+	socket.Transport = NewWebsocket(socket)
 	return socket
 }
 
+// Connect will start connection attempts with the server until successful or canceled with Disconnect.
 func (s *Socket) Connect() error {
 	// Add the 'vsn' query parameter to the connection url
 	q := s.EndPoint.Query()
 	q.Set("vsn", s.Serializer.vsn())
 	s.EndPoint.RawQuery = q.Encode()
 
-	err := s.Transport.Connect(s.EndPoint, s.RequestHeader)
+	s.Logger.Printf(LogInfo, "socket", "connecting to %v\n", s.EndPoint)
+
+	err := s.Transport.Connect(s.EndPoint, s.RequestHeader, s.ConnectTimeout)
 	if err != nil {
 		s.Logger.Println(LogError, "socket", err)
 		return err
@@ -71,6 +93,7 @@ func (s *Socket) Connect() error {
 	return nil
 }
 
+// Disconnect or stop trying to Connect to server.
 func (s *Socket) Disconnect() error {
 	err := s.Transport.Disconnect()
 	if err != nil {
@@ -81,6 +104,7 @@ func (s *Socket) Disconnect() error {
 	return nil
 }
 
+// Reconnect with the server.
 func (s *Socket) Reconnect() error {
 	err := s.Transport.Reconnect()
 	if err != nil {
@@ -109,7 +133,7 @@ func (s *Socket) ConnectionState() ConnectionState {
 	}
 }
 
-func (s *Socket) Push(topic string, event Event, payload any, joinRef Ref) (Ref, error) {
+func (s *Socket) Push(topic string, event string, payload any, joinRef Ref) (Ref, error) {
 	ref := s.MakeRef()
 
 	err := s.PushMessage(Message{
@@ -138,34 +162,44 @@ func (s *Socket) PushMessage(msg Message) error {
 	return nil
 }
 
+// MakeRef returns a unique Ref for this Socket.
 func (s *Socket) MakeRef() Ref {
 	return s.refGenerator.nextRef()
 }
 
+// OnOpen registers the given callback to be called whenever the Socket is opened successfully.
+// Returns a unique Ref that can be used to cancel this callback via Off.
 func (s *Socket) OnOpen(callback func()) Ref {
 	ref := s.MakeRef()
 	s.openCallbacks[ref] = callback
 	return ref
 }
 
+// OnClose registers the given callback to be called whenever the Socket is closed
+// Returns a unique Ref that can be used to cancel this callback via Off.
 func (s *Socket) OnClose(callback func()) Ref {
 	ref := s.MakeRef()
 	s.closeCallbacks[ref] = callback
 	return ref
 }
 
+// OnError registers the given callback to be called whenever the Socket has an error
+// Returns a unique Ref that can be used to cancel this callback via Off.
 func (s *Socket) OnError(callback func(error)) Ref {
 	ref := s.MakeRef()
 	s.errorCallbacks[ref] = callback
 	return ref
 }
 
+// OnMessage registers the given callback to be called whenever the server sends a message
+// Returns a unique Ref that can be used to cancel this callback via Off.
 func (s *Socket) OnMessage(callback func(Message)) Ref {
 	ref := s.MakeRef()
 	s.messageCallbacks[ref] = callback
 	return ref
 }
 
+// Off cancels the given callback from being called.
 func (s *Socket) Off(ref Ref) {
 	_, ok := s.openCallbacks[ref]
 	if ok {
@@ -192,10 +226,35 @@ func (s *Socket) Off(ref Ref) {
 	}
 }
 
+// Channel creates a new instance of phx.Channel, or returns an existing instance if it had already been created.
 func (s *Socket) Channel(topic string, params map[string]string) *Channel {
-	channel := NewChannel(topic, params, s)
-	s.channels = append(s.channels, channel)
-	return channel
+	channel, exists := s.channels[topic]
+	if exists {
+		return channel
+	} else {
+		channel := NewChannel(topic, params, s)
+		return channel
+	}
+}
+
+func (s *Socket) hasChannel(topic string) bool {
+	_, exists := s.channels[topic]
+	return exists
+}
+
+func (s *Socket) getChannel(topic string) (*Channel, bool) {
+	channel, exists := s.channels[topic]
+	return channel, exists
+}
+
+func (s *Socket) addChannel(channel *Channel) {
+	s.channels[channel.topic] = channel
+	s.Logger.Printf(LogDebug, "socket", "Added channel '%v'. Open channels: %v", channel.topic, len(s.channels))
+}
+
+func (s *Socket) removeChannel(channel *Channel) {
+	delete(s.channels, channel.topic)
+	s.Logger.Printf(LogDebug, "socket", "Removed channel '%v'. Open channels: %v", channel.topic, len(s.channels))
 }
 
 // implements TransportHandler
@@ -311,7 +370,7 @@ func (s *Socket) heartbeat() {
 			if s.hbRef == 0 {
 				s.hbRef = s.MakeRef()
 				s.Logger.Println(LogDebug, "heartbeat", "Sending heartbeat", s.hbRef)
-				err := s.PushMessage(Message{Topic: "phoenix", Event: HeartBeatEvent, Payload: nil, Ref: s.hbRef})
+				err := s.PushMessage(Message{Topic: "phoenix", Event: string(HeartBeatEvent), Payload: nil, Ref: s.hbRef})
 				if err != nil {
 					s.Logger.Println(LogError, "heartbeat", "Error when sending heartbeat", err)
 				}
