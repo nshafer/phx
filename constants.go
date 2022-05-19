@@ -1,6 +1,8 @@
 package phx
 
-import "time"
+import (
+	"time"
+)
 
 const (
 	// defaultConnectTimeout is the default handshake timeout
@@ -19,11 +21,10 @@ const (
 	messageQueueLength = 1000
 )
 
-// TODO: make these 1-based instead of 0-based
 func defaultReconnectAfterFunc(tries int) time.Duration {
 	schedule := []time.Duration{10, 50, 100, 150, 200, 250, 500, 1000, 2000}
-	if tries >= 0 && tries < len(schedule) {
-		return schedule[tries] * time.Millisecond
+	if tries >= 1 && tries-1 < len(schedule) {
+		return schedule[tries-1] * time.Millisecond
 	} else {
 		return 5000 * time.Millisecond
 	}
@@ -31,8 +32,8 @@ func defaultReconnectAfterFunc(tries int) time.Duration {
 
 func defaultRejoinAfterFunc(tries int) time.Duration {
 	schedule := []time.Duration{1000, 2000, 5000}
-	if tries >= 0 && tries < len(schedule) {
-		return schedule[tries] * time.Millisecond
+	if tries >= 1 && tries-1 < len(schedule) {
+		return schedule[tries-1] * time.Millisecond
 	} else {
 		return 10000 * time.Millisecond
 	}

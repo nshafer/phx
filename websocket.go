@@ -246,8 +246,8 @@ func (w *Websocket) connectionManager() {
 			if err != nil {
 				w.Handler.onConnError(err)
 				w.setReconnecting(true)
-				delay := w.Handler.reconnectAfter(w.connectionTries)
 				w.connectionTries++
+				delay := w.Handler.reconnectAfter(w.connectionTries)
 				select {
 				case <-w.done:
 				case <-time.After(delay):

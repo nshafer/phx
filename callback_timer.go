@@ -46,7 +46,7 @@ func (t *callbackTimer) Run() {
 		t.timer = nil
 	}
 
-	t.timer = time.AfterFunc(t.timerCalc(t.tries), func() {
+	t.timer = time.AfterFunc(t.timerCalc(t.tries+1), func() {
 		t.mu.Lock()
 		defer t.mu.Unlock()
 
