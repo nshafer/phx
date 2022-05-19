@@ -158,7 +158,7 @@ func (s *Socket) PushMessage(msg Message) error {
 		return err
 	}
 
-	s.Logger.Printf(LogDebug, "push", "Sent message %+v", msg)
+	s.Logger.Printf(LogDebug, "socket", "Sent message %+v", msg)
 	return nil
 }
 
@@ -264,7 +264,7 @@ func (s *Socket) reconnectAfter(tries int) time.Duration {
 }
 
 func (s *Socket) onConnOpen() {
-	s.Logger.Printf(LogInfo, "transport", "Connected to %v", s.EndPoint)
+	s.Logger.Printf(LogInfo, "socket", "Connected to %v", s.EndPoint)
 	s.startHeartbeat()
 	for _, cb := range s.openCallbacks {
 		cb()

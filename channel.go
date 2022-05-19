@@ -114,19 +114,19 @@ func (c *Channel) Join() (*Push, error) {
 	joinPush := NewPush(c, string(JoinEvent), c.params, c.PushTimeout)
 	c.setJoinPush(joinPush)
 	joinPush.Receive("ok", func(response any) {
-		fmt.Println("Channel.Join joinPush got ok", response)
+		c.socket.Logger.Printf(LogInfo, "channel", "joined channel '%v' joinRef:%v", c.topic, c.JoinRef())
 		c.setState(ChannelJoined)
 		c.trigger(string(JoinEvent), 0, response)
 		c.rejoinTimer.Reset()
 	})
 	joinPush.Receive("error", func(response any) {
-		fmt.Println("Channel.Join joinPush got error", response)
+		c.socket.Logger.Printf(LogError, "channel", "error joining channel '%v': %v", c.topic, response)
 		c.setState(ChannelErrored)
 		joinPush.reset()
 		c.rejoinTimer.Run()
 	})
 	joinPush.Receive("timeout", func(response any) {
-		fmt.Println("Channel.Join joinPush got timeout", response)
+		c.socket.Logger.Printf(LogError, "channel", "timeout joining channel '%v'", c.topic)
 		joinPush.reset()
 
 		// Fire-and-forget a leave push
@@ -165,15 +165,15 @@ func (c *Channel) Leave() (*Push, error) {
 	// Send a leave message even if we aren't connected and joined
 	leavePush := NewPush(c, string(LeaveEvent), c.params, c.PushTimeout)
 	leavePush.Receive("ok", func(response any) {
-		fmt.Println("Channel.Leave leavePush got ok", response)
+		c.socket.Logger.Printf(LogInfo, "channel", "left channel '%v'", c.topic)
 		c.trigger(string(CloseEvent), 0, "leave")
 	})
 	leavePush.Receive("error", func(response any) {
-		fmt.Println("Channel.Leave leavePush got error", response)
+		c.socket.Logger.Printf(LogError, "channel", "error leaving channel '%v': %v", c.topic, response)
 		c.trigger(string(CloseEvent), 0, "leave")
 	})
 	leavePush.Receive("timeout", func(response any) {
-		fmt.Println("Channel.Leave leavePush got timeout", response)
+		c.socket.Logger.Printf(LogError, "channel", "timeout leaving channel '%v'", c.topic)
 	})
 
 	if c.socket.IsConnected() {
@@ -236,7 +236,7 @@ func (c *Channel) On(event string, callback channelCallback) (bindingRef Ref) {
 // Returns a unique Ref that can be used to cancel this callback via Off.
 func (c *Channel) OnRef(ref Ref, event string, callback channelCallback) (bindingRef Ref) {
 	bindingRef = c.refGenerator.nextRef()
-	c.bindings[ref] = &channelBinding{
+	c.bindings[bindingRef] = &channelBinding{
 		ref:      ref,
 		event:    event,
 		callback: callback,
@@ -300,21 +300,12 @@ func (c *Channel) rejoin() {
 	}
 }
 
-func (c *Channel) setJoinPush(push *Push) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.joinPush = push
-}
-
 // process messages received from Socket
 func (c *Channel) process(msg *Message) {
 	if c.IsRemoved() {
 		// this shouldn't happen, but just in case
 		return
 	}
-
-	//fmt.Println("Channel.process", msg)
 
 	// We only care about messages that match our topic
 	if msg.Topic != c.topic {
@@ -342,6 +333,13 @@ func (c *Channel) trigger(event string, ref Ref, payload any) {
 			binding.callback(payload)
 		}
 	}
+}
+
+func (c *Channel) setJoinPush(push *Push) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.joinPush = push
 }
 
 func (c *Channel) getJoinPush() *Push {

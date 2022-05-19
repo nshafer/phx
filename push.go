@@ -1,7 +1,7 @@
 package phx
 
 import (
-	"fmt"
+	"sync"
 	"time"
 )
 
@@ -10,7 +10,6 @@ type pushCallback func(response any)
 type pushBinding struct {
 	status   string
 	callback pushCallback
-	// TODO: store reply for late binds via Receive()
 }
 
 // Push allows you to send an Event to the server and easily monitor for replies, errors or timeouts.
@@ -25,11 +24,14 @@ type Push struct {
 	// Timeout is the time to wait for a reply before triggering a "timeout" event.
 	Timeout time.Duration
 
+	mu           sync.RWMutex
 	channel      *Channel
 	Ref          Ref
 	timeoutTimer *time.Timer
 	callbacks    []*pushBinding
 	sent         bool
+	bindingRef   Ref
+	reply        any
 }
 
 // NewPush gets a new Push ready to send and allows you to attach event handlers for replies, errors, timeouts.
@@ -62,9 +64,14 @@ func (p *Push) Send() error {
 	}
 	p.sent = true
 
-	p.channel.OnRef(p.Ref, string(ReplyEvent), func(payload any) {
-		//fmt.Println("Push.Send.OnRef callback", payload)
+	p.bindingRef = p.channel.OnRef(p.Ref, string(ReplyEvent), func(payload any) {
+		// This runs in the Transports goroutine
+		p.mu.Lock()
+		defer p.mu.Unlock()
+
 		p.cancelTimeout()
+		p.channel.Off(p.bindingRef)
+		p.reply = payload
 		p.callCallbacks(payload)
 	})
 
@@ -81,28 +88,45 @@ func (p *Push) IsSent() bool {
 // If a custom event handler (handle_in/3) does not reply (returns :noreply) then the only events that will trigger
 // here are "error" and "timeout".
 func (p *Push) Receive(status string, callback pushCallback) {
+	if p.reply != nil {
+		replyStatus, replyResponse, ok := p.deconstructPayload(p.reply)
+		if ok && replyStatus == status {
+			callback(replyResponse)
+			return
+		}
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.callbacks = append(p.callbacks, &pushBinding{status: status, callback: callback})
 }
 
 func (p *Push) callCallbacks(payload any) {
+	status, response, ok := p.deconstructPayload(payload)
+	if ok {
+		p.trigger(status, response)
+	}
+}
+
+func (p *Push) deconstructPayload(payload any) (status string, response any, ok bool) {
 	m, ok := payload.(map[string]any)
 	if !ok {
 		return
 	}
-	status, ok := m["status"]
+	statusRaw, ok := m["status"]
 	if !ok {
 		return
 	}
-	statusStr, ok := status.(string)
+	status, ok = statusRaw.(string)
 	if !ok {
 		return
 	}
-	response, ok := m["response"]
+	response, ok = m["response"]
 	if !ok {
 		return
 	}
 
-	p.trigger(statusStr, response)
+	return
 }
 
 func (p *Push) trigger(status string, response any) {
@@ -121,7 +145,10 @@ func (p *Push) cancelTimeout() {
 }
 
 func (p *Push) timeout() {
-	fmt.Printf("Push.timeout!, %+v\n", p)
+	// This runs in the Timer's goroutine
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	p.trigger("timeout", nil)
 }
 

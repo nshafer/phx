@@ -229,6 +229,9 @@ func main() {
 				p.Receive("error", func(response any) {
 					fmt.Println("Push error:", response)
 				})
+				p.Receive("timeout", func(response any) {
+					fmt.Println("Push timeout:", response)
+				})
 			} else {
 				fmt.Println("Create a channel first")
 			}
