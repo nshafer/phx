@@ -11,7 +11,11 @@ This module is based off of the official JavaScript client implementation, excep
 being written in Go. But if you're familiar with connecting to Phoenix Channels in JS, then this library should feel
 right at home.
 
-## [API Documentation](https://pkg.go.dev/github.com/nshafer/phx)
+## Installation
+
+    go get github.com/nshafer/phx
+
+## Documentation
 
 API documentation can be viewed via godoc at [API Documentation](https://pkg.go.dev/github.com/nshafer/phx).
 
