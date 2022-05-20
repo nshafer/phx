@@ -13,6 +13,8 @@ right at home.
 
 ## Installation
 
+This module requires Go 1.18 or later.
+
     go get github.com/nshafer/phx
 
 ## Documentation
