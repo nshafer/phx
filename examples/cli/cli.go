@@ -12,7 +12,7 @@ import (
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Println("Usage: go run main.go ws[s]://host[:port]/[path][?key=value]")
+		fmt.Println("Usage: go run cli.go ws[s]://host[:port]/[path][?key=value]")
 		os.Exit(1)
 	}
 
@@ -26,7 +26,7 @@ func main() {
 
 	socket := phx.NewSocket(endPoint)
 	//socket.Serializer = phx.NewJSONSerializerV1()
-	socket.Logger = phx.NewSimpleLogger(phx.LogDebug)
+	socket.Logger = phx.NewSimpleLogger(phx.LogInfo)
 	socket.OnOpen(func() {
 		fmt.Println("+ connected")
 	})

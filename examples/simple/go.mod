@@ -1,4 +1,4 @@
-module github.com/nshafer/phx/examples/client
+module github.com/nshafer/phx/examples/simple
 
 go 1.18
 
