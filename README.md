@@ -1,3 +1,5 @@
+[![Go Reference](https://pkg.go.dev/badge/github.com/nshafer/phx.svg)](https://pkg.go.dev/github.com/nshafer/phx)
+
 # Phx - the Phoenix Channels client for Go
 
 This is a comprehensive client for Phoenix Channels written for Go applications.
