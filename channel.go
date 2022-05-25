@@ -6,12 +6,10 @@ import (
 	"time"
 )
 
-type channelCallback func(payload any)
-
 type channelBinding struct {
 	ref      Ref
 	event    string
-	callback channelCallback
+	callback func(payload any)
 }
 
 // A Channel is a unique connection to the given Topic on the server. You can have many Channels connected over one
@@ -222,7 +220,7 @@ func (c *Channel) Push(event string, payload any) (*Push, error) {
 
 // On will register the given callback for all matching events received on this Channel.
 // Returns a unique Ref that can be used to cancel this callback via Off.
-func (c *Channel) On(event string, callback channelCallback) (bindingRef Ref) {
+func (c *Channel) On(event string, callback func(payload any)) (bindingRef Ref) {
 	bindingRef = c.refGenerator.nextRef()
 	c.bindings[bindingRef] = &channelBinding{
 		event:    event,
@@ -234,7 +232,7 @@ func (c *Channel) On(event string, callback channelCallback) (bindingRef Ref) {
 // OnRef will register the given callback for all matching events only if the ref also matches.
 // This is mostly used by Push so that it can get ReplyEvents for its messages.
 // Returns a unique Ref that can be used to cancel this callback via Off.
-func (c *Channel) OnRef(ref Ref, event string, callback channelCallback) (bindingRef Ref) {
+func (c *Channel) OnRef(ref Ref, event string, callback func(payload any)) (bindingRef Ref) {
 	bindingRef = c.refGenerator.nextRef()
 	c.bindings[bindingRef] = &channelBinding{
 		ref:      ref,
@@ -246,20 +244,20 @@ func (c *Channel) OnRef(ref Ref, event string, callback channelCallback) (bindin
 
 // OnJoin will register the given callback for whenever this Channel joins successfully to the server.
 // Returns a unique Ref that can be used to cancel this callback via Off.
-func (c *Channel) OnJoin(callback channelCallback) (bindingRef Ref) {
+func (c *Channel) OnJoin(callback func(payload any)) (bindingRef Ref) {
 	return c.On(string(JoinEvent), callback)
 }
 
 // OnClose will register the given callback for whenever this Channel is closed.
 // Returns a unique Ref that can be used to cancel this callback via Off.
-func (c *Channel) OnClose(callback channelCallback) (bindingRef Ref) {
+func (c *Channel) OnClose(callback func(payload any)) (bindingRef Ref) {
 	return c.On(string(CloseEvent), callback)
 }
 
 // OnError will register the given callback for whenever this channel gets an ErrorEvent message, such as the channel
 // process crashing.
 // Returns a unique Ref that can be used to cancel this callback via Off.
-func (c *Channel) OnError(callback channelCallback) (bindingRef Ref) {
+func (c *Channel) OnError(callback func(payload any)) (bindingRef Ref) {
 	return c.On(string(ErrorEvent), callback)
 }
 
