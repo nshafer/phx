@@ -14,6 +14,20 @@ const (
 	LogError               = 3
 )
 
+func (level LoggerLevel) String() string {
+	switch level {
+	case LogDebug:
+		return "DEBUG"
+	case LogInfo:
+		return "INFO"
+	case LogWarning:
+		return "WARNING"
+	case LogError:
+		return "ERROR"
+	}
+	return "UNKNOWN"
+}
+
 type Logger interface {
 	Print(level LoggerLevel, kind string, v ...any)
 	Println(level LoggerLevel, kind string, v ...any)
@@ -44,25 +58,12 @@ func NewCustomLogger(level LoggerLevel, logger *log.Logger) *CustomLogger {
 	}
 }
 
-func (l *CustomLogger) formatLevel(level LoggerLevel) string {
-	switch level {
-	case LogDebug:
-		return "[DEBUG]"
-	case LogInfo:
-		return "[INFO]"
-	case LogWarning:
-		return "[WARNING]"
-	case LogError:
-		return "[ERROR]"
-	}
-	return "[UNK]"
-}
-
 func (l *CustomLogger) formatKind(kind string) string {
 	return fmt.Sprintf("<%s>", kind)
 }
 
-func (l *CustomLogger) print(level LoggerLevel, kind string, v ...any) {
+func (l *CustomLogger) formatLevel(level LoggerLevel) string {
+	return fmt.Sprintf("[%s]", level)
 }
 
 func (l *CustomLogger) Print(level LoggerLevel, kind string, v ...any) {
