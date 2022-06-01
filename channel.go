@@ -328,7 +328,7 @@ func (c *Channel) trigger(event string, ref Ref, payload any) {
 	// For a given channelBinding to get called it must match the event and either have ref == 0 or match the ref
 	for _, binding := range c.bindings {
 		if binding.event == event && (binding.ref == 0 || binding.ref == ref) {
-			binding.callback(payload)
+			go binding.callback(payload)
 		}
 	}
 }

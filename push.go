@@ -132,7 +132,7 @@ func (p *Push) deconstructPayload(payload any) (status string, response any, ok 
 func (p *Push) trigger(status string, response any) {
 	for _, callback := range p.callbacks {
 		if callback.status == status {
-			callback.callback(response)
+			go callback.callback(response)
 		}
 	}
 }

@@ -12,7 +12,7 @@ import (
 //
 // then adding it to 'user_socket.ex' like:
 //
-//     channel "test:lobby", TruestackWeb.TestChannel
+//     channel "test:lobby", MyProjectWeb.TestChannel
 //
 // See https://hexdocs.pm/phoenix/channels.html for more information
 

@@ -267,7 +267,7 @@ func (s *Socket) onConnOpen() {
 	s.Logger.Printf(LogInfo, "socket", "Connected to %v", s.EndPoint)
 	s.startHeartbeat()
 	for _, cb := range s.openCallbacks {
-		cb()
+		go cb()
 	}
 }
 
@@ -275,13 +275,13 @@ func (s *Socket) onConnClose() {
 	s.Logger.Printf(LogInfo, "socket", "Disconnected from %v", s.EndPoint)
 	s.stopHeartbeat()
 	for _, cb := range s.closeCallbacks {
-		cb()
+		go cb()
 	}
 }
 
 func (s *Socket) callErrorCallbacks(err error) {
 	for _, cb := range s.errorCallbacks {
-		cb(err)
+		go cb(err)
 	}
 }
 
@@ -319,7 +319,7 @@ func (s *Socket) onConnMessage(data []byte) {
 	}
 
 	for _, cb := range s.messageCallbacks {
-		cb(*msg)
+		go cb(*msg)
 	}
 
 	for _, channel := range s.channels {
