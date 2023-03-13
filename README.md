@@ -2,6 +2,9 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/nshafer/phx.svg)](https://pkg.go.dev/github.com/nshafer/phx)
 
+> note:
+> fork form [nshafer/phx](https://github.com/nshafer/phx),fix panic bug when websocket has been closed.
+
 This is a comprehensive client for Phoenix Channels written for Go applications.
 The goal of this project is to be a reliable, resilient, full-featured client library for connecting to Phoenix
 servers over websockets and being able to push and receive events from one or more channels in a performant and
@@ -15,7 +18,7 @@ right at home.
 
 This module requires Go 1.18 or later.
 
-    go get github.com/nshafer/phx
+    go get github.com/xiaowang7777/phx
 
 ## Documentation
 
