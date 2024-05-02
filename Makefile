@@ -7,5 +7,6 @@ ifndef ver
 endif
 	go mod tidy
 	git tag $(ver)
+	git push origin
 	git push origin --tags
 	GOPROXY=proxy.golang.org go list -m github.com/nshafer/phx@$(ver)
