@@ -155,8 +155,8 @@ func (p *Push) timeout() {
 // reset this push so that it will no longer timeout and won't process messages from the server.
 func (p *Push) reset() {
 	p.cancelTimeout()
-	if p.Ref != 0 {
-		p.channel.Off(p.Ref)
+	if p.bindingRef != 0 {
+		p.channel.Off(p.bindingRef)
 	}
 	p.Ref = 0
 }
