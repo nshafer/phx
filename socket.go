@@ -175,7 +175,7 @@ func (s *Socket) OnOpen(callback func()) Ref {
 	return ref
 }
 
-// OnClose registers the given callback to be called whenever the Socket is closed
+// OnClose registers the given callback to be called whenever the Socket is closed.
 // Returns a unique Ref that can be used to cancel this callback via Off.
 func (s *Socket) OnClose(callback func()) Ref {
 	ref := s.MakeRef()
@@ -183,7 +183,7 @@ func (s *Socket) OnClose(callback func()) Ref {
 	return ref
 }
 
-// OnError registers the given callback to be called whenever the Socket has an error
+// OnError registers the given callback to be called whenever the Socket has an error.
 // Returns a unique Ref that can be used to cancel this callback via Off.
 func (s *Socket) OnError(callback func(error)) Ref {
 	ref := s.MakeRef()
@@ -191,7 +191,7 @@ func (s *Socket) OnError(callback func(error)) Ref {
 	return ref
 }
 
-// OnMessage registers the given callback to be called whenever the server sends a message
+// OnMessage registers the given callback to be called whenever the server sends a message.
 // Returns a unique Ref that can be used to cancel this callback via Off.
 func (s *Socket) OnMessage(callback func(Message)) Ref {
 	ref := s.MakeRef()
