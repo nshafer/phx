@@ -11,7 +11,8 @@ import (
 	"time"
 )
 
-// Websocket is a Transport that connects to the server via Websockets.
+// Websocket is a Transport that connects to the server via Websockets. It is based on
+// [gorilla.Websocket](https://pkg.go.dev/github.com/gorilla/websocket). The Dialer defaults to websocket.DefaultDialer.
 type Websocket struct {
 	Dialer          *websocket.Dialer
 	Handler         TransportHandler

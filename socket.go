@@ -55,7 +55,16 @@ type Socket struct {
 // NewSocket creates a Socket that connects to the given endPoint using the default websocket Transport.
 // After creating the socket, several options can be set, such as Transport, Logger, Serializer and timeouts.
 //
-// If a custom websocket.Dialer is needed, such as to set up a Proxy, then create a custom WebSocket
+// If a custom websocket.Dialer is needed, such as to set up a Proxy, then create a custom WebSocket and assign
+// it as the Socket's Transport:
+//
+// ```go
+// socket := phx.NewSocket(endPoint)
+// ws := phx.NewWebsocket(socket)
+// proxyURL, _ := url.Parse("http://localhost:8888")
+// ws.Dialer.Proxy = http.ProxyURL(proxyURL)
+// socket.Transport = ws
+// ```
 func NewSocket(endPoint *url.URL) *Socket {
 	socket := &Socket{
 		EndPoint:           endPoint,
