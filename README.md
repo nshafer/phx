@@ -1,6 +1,6 @@
 # Phx - A Phoenix Channels client for Go
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/nshafer/phx.svg)](https://pkg.go.dev/github.com/nshafer/phx)
+[![Go Reference](https://pkg.go.dev/badge/github.com/nshafer/phx.svg)](https://pkg.go.dev/github.com/nshafer/phx) [![Static Badge](https://img.shields.io/badge/changelog-blue)](https://github.com/nshafer/phx/releases)
 
 This is a comprehensive client for Phoenix Channels written for Go applications.
 The goal of this project is to be a reliable, resilient, full-featured client library for connecting to Phoenix
@@ -22,6 +22,10 @@ This module requires Go 1.18 or later.
 API documentation can be viewed via godoc at [API Documentation](https://pkg.go.dev/github.com/nshafer/phx).
 
 Examples are in [examples/](examples/).
+
+## Changelog
+
+Please see [Releases](https://github.com/nshafer/phx/releases) on Github.
 
 ## Features
 
