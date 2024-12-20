@@ -223,8 +223,8 @@ func (c *Channel) Push(event string, payload any) (*Push, error) {
 func (c *Channel) On(event string, callback func(payload any)) (bindingRef Ref) {
 	bindingRef = c.refGenerator.nextRef()
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	c.bindings[bindingRef] = &channelBinding{
 		event:    event,
@@ -239,8 +239,8 @@ func (c *Channel) On(event string, callback func(payload any)) (bindingRef Ref) 
 func (c *Channel) OnRef(ref Ref, event string, callback func(payload any)) (bindingRef Ref) {
 	bindingRef = c.refGenerator.nextRef()
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	c.bindings[bindingRef] = &channelBinding{
 		ref:      ref,
@@ -271,16 +271,16 @@ func (c *Channel) OnError(callback func(payload any)) (bindingRef Ref) {
 
 // Off removes the callback for the given bindingRef, as returned by On, OnRef, OnJoin, OnClose, OnError.
 func (c *Channel) Off(bindingRef Ref) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	delete(c.bindings, bindingRef)
 }
 
 // Clear removes all bindings for the given event
 func (c *Channel) Clear(event string) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	for ref, binding := range c.bindings {
 		if binding.event == event {
