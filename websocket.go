@@ -24,6 +24,7 @@ type Websocket struct {
 	close           chan bool
 	reconnect       chan bool
 	closeMsg        chan bool
+	closeSend       chan bool
 	send            chan []byte
 	connectionTries int
 	mu              sync.RWMutex
@@ -133,6 +134,7 @@ func (w *Websocket) startup() {
 	w.done = make(chan any)
 	w.close = make(chan bool)
 	w.closeMsg = make(chan bool)
+	w.closeSend = make(chan bool)
 	w.reconnect = make(chan bool)
 	w.send = make(chan []byte, messageQueueLength)
 
@@ -153,6 +155,7 @@ func (w *Websocket) shutdown() {
 	close(w.done)
 	close(w.close)
 	close(w.closeMsg)
+	close(w.closeSend)
 	close(w.reconnect)
 	close(w.send)
 
@@ -181,16 +184,15 @@ func (w *Websocket) closeConn() {
 	//fmt.Println("closeConn")
 
 	if w.connIsSet() {
-		// attempt to gracefully close the connection by sending a close websocket message
-		err := w.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-		if err == nil {
-			// Wait for a close message to be received by `connectionReader`, or time out after 5 seconds
-			w.setWaitingForClose(true)
-			select {
-			case <-w.closeMsg:
-			case <-time.After(3 * time.Second):
-			}
+		// Tell the connectionWriter to gracefully close the connection by sending a close websocket message
+		w.setWaitingForClose(true)
+		w.closeSend <- true
+		// Wait for a close message to be received by `connectionReader`, or time out after 5 seconds
+		select {
+		case <-w.closeMsg:
+		case <-time.After(5 * time.Second):
 		}
+		w.setWaitingForClose(false)
 	}
 
 	if w.connIsSet() {
@@ -206,12 +208,12 @@ func (w *Websocket) closeConn() {
 	w.setClosing(false)
 }
 
-func (w *Websocket) writeToConn(data []byte) error {
+func (w *Websocket) writeToConn(messageType int, data []byte) error {
 	if !w.connIsReady() {
 		return errors.New("connection is not open")
 	}
 
-	return w.conn.WriteMessage(websocket.TextMessage, data)
+	return w.conn.WriteMessage(messageType, data)
 }
 
 func (w *Websocket) readFromConn() ([]byte, error) {
@@ -289,6 +291,16 @@ func (w *Websocket) connectionWriter() {
 		select {
 		case <-w.done:
 			return
+		case <-w.closeSend:
+			// Send a close message to the server
+			if w.connIsSet() {
+				data := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")
+				err := w.conn.WriteMessage(websocket.CloseMessage, data)
+				if err != nil {
+					w.Handler.onWriteError(err)
+				}
+			}
+
 		case data := <-w.send:
 			// If there is a message to send, but we're not connected, then wait until we are.
 			if !w.connIsReady() {
@@ -297,14 +309,13 @@ func (w *Websocket) connectionWriter() {
 			}
 
 			// Send the message
-			err := w.writeToConn(data)
+			err := w.writeToConn(websocket.TextMessage, data)
 
 			// If there were any errors sending, then tell the connectionManager to reconnect
 			if err != nil {
 				w.Handler.onWriteError(err)
 				w.sendReconnect()
 				time.Sleep(busyWait)
-				continue
 			}
 		}
 	}
