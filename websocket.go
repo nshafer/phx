@@ -182,15 +182,19 @@ func (w *Websocket) closeConn() {
 
 	if w.connIsSet() {
 		// attempt to gracefully close the connection by sending a close websocket message
-		err := w.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+		data := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")
+		deadline := time.Now().Add(2 * time.Second)
+		w.setWaitingForClose(true)
+		err := w.conn.WriteControl(websocket.CloseMessage, data, deadline)
 		if err == nil {
-			// Wait for a close message to be received by `connectionReader`, or time out after 5 seconds
+			// Wait for a close message to be received by `connectionReader`, or time out after 2 seconds
 			w.setWaitingForClose(true)
 			select {
 			case <-w.closeMsg:
-			case <-time.After(3 * time.Second):
+			case <-time.After(2 * time.Second):
 			}
 		}
+		w.setWaitingForClose(false)
 	}
 
 	if w.connIsSet() {
