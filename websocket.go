@@ -344,6 +344,7 @@ func (w *Websocket) connectionReader() {
 				w.closeMsg <- true
 			} else {
 				w.Handler.onReadError(err)
+				w.setConn(nil)
 				w.sendReconnect()
 			}
 
