@@ -145,11 +145,27 @@ func (p *Push) cancelTimeout() {
 }
 
 func (p *Push) timeout() {
-	// This runs in the Timer's goroutine
+	// This runs in the Timer's goroutine.
+	// Timeout is terminal: unbind to avoid dangling bindings retaining payloads.
+	// This changes original behavior! It now ignores late replies since the push is already timed out.
+	// Also timeout callbacks are now be called **after** unbinding.
+	// We intentionally snapshot callbacks so we don't hold the lock while calling user code.
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	ref := p.bindingRef
+	p.bindingRef = 0
+	p.timeoutTimer = nil
+	callbacks := make([]*pushBinding, len(p.callbacks))
+	copy(callbacks, p.callbacks)
+	p.mu.Unlock()
 
-	p.trigger("timeout", nil)
+	if ref != 0 {
+		p.channel.Off(ref)
+	}
+	for _, callback := range callbacks {
+		if callback.status == "timeout" {
+			go callback.callback(nil)
+		}
+	}
 }
 
 // reset this push so that it will no longer timeout and won't process messages from the server.
