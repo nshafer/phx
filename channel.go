@@ -23,7 +23,7 @@ type Channel struct {
 
 	// private
 	topic           string
-	params          map[string]string
+	params          any
 	mu              sync.RWMutex
 	socket          *Socket
 	state           ChannelState
@@ -36,7 +36,7 @@ type Channel struct {
 
 // NewChannel creates a new Channel attached to the Socket. If there is already a Channel for the given topic, that
 // channel is returned instead of creating a new one.
-func NewChannel(topic string, params map[string]string, socket *Socket) *Channel {
+func NewChannel(topic string, params any, socket *Socket) *Channel {
 	channel, exists := socket.getChannel(topic)
 	if exists {
 		return channel

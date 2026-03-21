@@ -236,7 +236,7 @@ func (s *Socket) Off(ref Ref) {
 }
 
 // Channel creates a new instance of phx.Channel, or returns an existing instance if it had already been created.
-func (s *Socket) Channel(topic string, params map[string]string) *Channel {
+func (s *Socket) Channel(topic string, params any) *Channel {
 	channel, exists := s.channels[topic]
 	if exists {
 		return channel
