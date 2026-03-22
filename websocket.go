@@ -56,15 +56,16 @@ func (w *Websocket) Connect(endPoint *url.URL, requestHeader http.Header, connec
 		newEndpoint.Path = path.Join(newEndpoint.Path, "websocket")
 	}
 
-	if newEndpoint.Scheme == "" {
+	switch newEndpoint.Scheme {
+	case "":
 		if newEndpoint.Port() == "443" {
 			newEndpoint.Scheme = "wss"
 		} else {
 			newEndpoint.Scheme = "ws"
 		}
-	} else if newEndpoint.Scheme == "http" {
+	case "http":
 		newEndpoint.Scheme = "ws"
-	} else if newEndpoint.Scheme == "https" {
+	case "https":
 		newEndpoint.Scheme = "wss"
 	}
 
