@@ -392,10 +392,10 @@ func decodeBinaryBroadcast(data []byte) *Message {
 	// Read payload
 	payloadBytes := data[offset:]
 
-	// Parse JSON payload if encoding is JSON (1)
+	// Keep payload as string for JSON encoding
 	var parsedPayload any
 	if encoding == 1 && len(payloadBytes) > 0 {
-		parsedPayload = string(payloadBytes) // Keep as string for now, handler will parse
+		parsedPayload = string(payloadBytes)
 	} else {
 		parsedPayload = payloadBytes
 	}
