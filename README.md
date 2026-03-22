@@ -74,7 +74,6 @@ channel.On("shout", func(payload any) {
 There is also a simple CLI example for interactively using the library to connect to any server/channel in
 [examples/cli/cli.go](examples/cli/cli.go).
 
-## Not implemented currently:
+## Not implemented currently
 
 - Longpoll transport.
-- Binary messages.
