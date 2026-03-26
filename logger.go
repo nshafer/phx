@@ -9,9 +9,9 @@ type LoggerLevel int
 
 const (
 	LogDebug   LoggerLevel = 0
-	LogInfo                = 1
-	LogWarning             = 2
-	LogError               = 3
+	LogInfo    LoggerLevel = 1
+	LogWarning LoggerLevel = 2
+	LogError   LoggerLevel = 3
 )
 
 func (level LoggerLevel) String() string {

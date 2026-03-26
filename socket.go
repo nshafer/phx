@@ -236,7 +236,7 @@ func (s *Socket) Off(ref Ref) {
 }
 
 // Channel creates a new instance of phx.Channel, or returns an existing instance if it had already been created.
-func (s *Socket) Channel(topic string, params map[string]string) *Channel {
+func (s *Socket) Channel(topic string, params any) *Channel {
 	channel, exists := s.channels[topic]
 	if exists {
 		return channel
@@ -313,9 +313,26 @@ func (s *Socket) onReadError(err error) {
 }
 
 func (s *Socket) onConnMessage(data []byte) {
+	if len(data) == 0 {
+		return
+	}
+
+	// Check if this is a binary message (binary messages start with kind byte)
+	// Kind 4 = userBroadcast
+	if len(data) > 0 && data[0] == 4 {
+		msg := decodeBinaryBroadcast(data)
+		if msg != nil {
+			s.Logger.Printf(LogDebug, "socket", "Binary broadcast received: %+v", msg)
+			for _, channel := range s.channels {
+				channel.process(msg)
+			}
+			return
+		}
+	}
+
 	msg, err := s.Serializer.decode(data)
 	if err != nil {
-		s.Logger.Println(LogError, "socket", "could not decode data to Message:", err)
+		s.Logger.Printf(LogError, "socket", "could not decode data to Message: %v", err)
 		return
 	}
 
@@ -333,6 +350,66 @@ func (s *Socket) onConnMessage(data []byte) {
 
 	for _, channel := range s.channels {
 		channel.process(msg)
+	}
+}
+
+// Binary message format for broadcasts:
+// [kind, topicSize, eventSize, metaSize, encoding, topic..., event..., meta..., payload...]
+func decodeBinaryBroadcast(data []byte) *Message {
+	if len(data) < 6 {
+		return nil
+	}
+
+	kind := data[0]
+	if kind != 4 { // Not a user broadcast
+		return nil
+	}
+
+	topicSize := int(data[1])
+	eventSize := int(data[2])
+	metaSize := int(data[3])
+	encoding := data[4]
+
+	offset := 5
+
+	// Read topic
+	if offset+topicSize > len(data) {
+		return nil
+	}
+	topic := string(data[offset : offset+topicSize])
+	offset += topicSize
+
+	// Read event
+	if offset+eventSize > len(data) {
+		return nil
+	}
+	event := string(data[offset : offset+eventSize])
+	offset += eventSize
+
+	// Read metadata (optional, currently unused)
+	offset += metaSize
+
+	// Read payload
+	payloadBytes := data[offset:]
+
+	// Keep payload as string for JSON encoding
+	var parsedPayload any
+	if encoding == 1 && len(payloadBytes) > 0 {
+		parsedPayload = string(payloadBytes)
+	} else {
+		parsedPayload = payloadBytes
+	}
+
+	return &Message{
+		JoinRef: 0,
+		Ref:     0,
+		Topic:   topic,
+		Event:   "broadcast",
+		Payload: map[string]any{
+			"type":    "broadcast",
+			"event":   event,
+			"payload": parsedPayload,
+		},
 	}
 }
 

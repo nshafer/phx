@@ -2,13 +2,14 @@ package phx
 
 import (
 	"errors"
-	"fmt"
-	"github.com/gorilla/websocket"
 	"net/http"
 	"net/url"
 	"path"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // Websocket is a Transport that connects to the server via Websockets. It is based on
@@ -50,17 +51,21 @@ func (w *Websocket) Connect(endPoint *url.URL, requestHeader http.Header, connec
 	// Copy the passed in endpoint so we can modify it
 	newEndpoint := *endPoint
 
-	newEndpoint.Path = path.Join(newEndpoint.Path, "websocket")
+	// Only append /websocket if the path doesn't already end with /websocket
+	if !strings.HasSuffix(newEndpoint.Path, "/websocket") {
+		newEndpoint.Path = path.Join(newEndpoint.Path, "websocket")
+	}
 
-	if newEndpoint.Scheme == "" {
+	switch newEndpoint.Scheme {
+	case "":
 		if newEndpoint.Port() == "443" {
 			newEndpoint.Scheme = "wss"
 		} else {
 			newEndpoint.Scheme = "ws"
 		}
-	} else if newEndpoint.Scheme == "http" {
+	case "http":
 		newEndpoint.Scheme = "ws"
-	} else if newEndpoint.Scheme == "https" {
+	case "https":
 		newEndpoint.Scheme = "wss"
 	}
 
@@ -227,11 +232,19 @@ func (w *Websocket) readFromConn() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if messageType != websocket.TextMessage {
-		return nil, errors.New(fmt.Sprint("Got unsupported websocket message type", messageType))
-	}
 
-	return data, nil
+	switch messageType {
+	case websocket.TextMessage:
+		return data, nil
+	case websocket.PongMessage:
+		return nil, nil
+	case websocket.CloseMessage:
+		return nil, errors.New("connection closed by server")
+	case websocket.BinaryMessage:
+		return data, nil
+	default:
+		return nil, nil
+	}
 }
 
 func (w *Websocket) connectionManager() {
