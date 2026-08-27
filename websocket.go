@@ -115,50 +115,64 @@ func (w *Websocket) ConnectionState() ConnectionState {
 }
 
 func (w *Websocket) Send(msg []byte) error {
-	if w.isClosing() {
+	w.mu.RLock()
+	if w.closing {
+		w.mu.RUnlock()
 		return errors.New("cannot Send when closing connection")
 	}
-
-	if !w.isStarted() {
+	if !w.started {
+		w.mu.RUnlock()
 		return errors.New("cannot Send when not connected or connecting")
 	}
+	done := w.done
+	w.mu.RUnlock()
 
-	w.send <- msg
-	return nil
+	select {
+	case w.send <- msg:
+		return nil
+	case <-done:
+		return errors.New("cannot Send after connection is shut down")
+	}
 }
 
 func (w *Websocket) startup() {
 	w.connectionTries = 0
 
+	w.mu.Lock()
 	w.done = make(chan any)
 	w.close = make(chan bool)
 	w.closeMsg = make(chan bool)
 	w.reconnect = make(chan bool)
 	w.send = make(chan []byte, messageQueueLength)
-
-	w.setReconnecting(false)
-	w.setClosing(false)
+	w.reconnecting = false
+	w.closing = false
+	w.started = true
+	w.mu.Unlock()
 
 	go w.connectionManager()
 	go w.connectionWriter()
 	go w.connectionReader()
-
-	w.setStarted(true)
 }
 
 func (w *Websocket) shutdown() {
 	//fmt.Println("shutdown")
 
-	// Tell the goroutines to exit
-	close(w.done)
-	close(w.close)
-	close(w.closeMsg)
-	close(w.reconnect)
-	close(w.send)
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
-	w.setStarted(false)
-	w.setReconnecting(false)
-	w.setClosing(false)
+	if !w.started {
+		return
+	}
+
+	// Tell the goroutines to exit. Only the done channel is closed; the
+	// signal channels (close, closeMsg, reconnect, send) are left open so a
+	// concurrent sender can never panic with "send on closed channel" — every
+	// send on them selects against done instead.
+	close(w.done)
+
+	w.started = false
+	w.reconnecting = false
+	w.closing = false
 }
 
 func (w *Websocket) dial() error {
@@ -341,7 +355,11 @@ func (w *Websocket) connectionReader() {
 			//fmt.Printf("read error %e %v\n", err, err)
 			if websocket.IsCloseError(err, 1000) && w.isWaitingForClose() {
 				// tell the connectionManager that we got the close message
-				w.closeMsg <- true
+				select {
+				case w.closeMsg <- true:
+				case <-w.done:
+					return
+				}
 			} else {
 				w.Handler.onReadError(err)
 				w.setConn(nil)
@@ -386,14 +404,22 @@ func (w *Websocket) isClosing() bool {
 
 func (w *Websocket) sendClose() {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 
-	if w.closing == true {
+	if w.closing || !w.started {
+		w.mu.Unlock()
 		return
 	}
 
 	w.closing = true
-	w.close <- true
+	done := w.done
+	// Release the lock before signalling so a concurrent shutdown() can never
+	// deadlock against a blocked send.
+	w.mu.Unlock()
+
+	select {
+	case w.close <- true:
+	case <-done:
+	}
 }
 
 func (w *Websocket) setReconnecting(reconnecting bool) {
@@ -412,14 +438,22 @@ func (w *Websocket) isReconnecting() bool {
 
 func (w *Websocket) sendReconnect() {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 
-	if w.reconnecting || w.closing {
+	if w.reconnecting || w.closing || !w.started {
+		w.mu.Unlock()
 		return
 	}
 
 	w.reconnecting = true
-	w.reconnect <- true
+	done := w.done
+	// Release the lock before signalling so a concurrent shutdown() can never
+	// deadlock against a blocked send.
+	w.mu.Unlock()
+
+	select {
+	case w.reconnect <- true:
+	case <-done:
+	}
 }
 
 func (w *Websocket) setConn(conn *websocket.Conn) {
