@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -46,7 +47,9 @@ type Socket struct {
 	messageCallbacks map[Ref]func(Message)
 	channels         map[string]*Channel
 
-	// heartbeat related state
+	// heartbeat related state, guarded by hbMu. hbClose and hbMsg belong to the heartbeat goroutine of the current
+	// connection and are nil while there is none.
+	hbMu    sync.Mutex
 	hbMsg   chan *Message
 	hbClose chan any
 	hbRef   Ref
@@ -321,10 +324,20 @@ func (s *Socket) onConnMessage(data []byte) {
 
 	s.Logger.Printf(LogDebug, "socket", "Received message: %+v", msg)
 
-	if msg.Topic == "phoenix" && msg.Ref == s.hbRef {
-		// Send this message to the heartbeat goroutine
-		s.hbMsg <- msg
-		return
+	if msg.Topic == "phoenix" {
+		s.hbMu.Lock()
+		hbMsg, isHeartbeat := s.hbMsg, msg.Ref == s.hbRef
+		s.hbMu.Unlock()
+
+		if isHeartbeat {
+			// Send this message to the heartbeat goroutine. Never block the reader on it: it may have stopped, and
+			// it only waits for one reply at a time, which the buffer holds.
+			select {
+			case hbMsg <- msg:
+			default:
+			}
+			return
+		}
 	}
 
 	for _, cb := range s.messageCallbacks {
@@ -340,46 +353,75 @@ func (s *Socket) onConnMessage(data []byte) {
  * Heartbeat related functionality
  */
 func (s *Socket) startHeartbeat() {
-	s.hbClose = make(chan any)
-	s.hbMsg = make(chan *Message)
+	hbClose := make(chan any)
+	hbMsg := make(chan *Message, 1)
+
+	s.hbMu.Lock()
+	s.hbClose = hbClose
+	s.hbMsg = hbMsg
+	s.hbRef = 0
+	s.hbMu.Unlock()
+
 	if startHeartbeat {
-		go s.heartbeat()
+		go s.heartbeat(hbClose, hbMsg)
 	}
 }
 
 func (s *Socket) stopHeartbeat() {
-	close(s.hbClose)
-	close(s.hbMsg)
+	s.hbMu.Lock()
+	defer s.hbMu.Unlock()
+
+	if s.hbClose != nil {
+		close(s.hbClose)
+	}
+	s.hbClose = nil
+	s.hbMsg = nil
+	s.hbRef = 0
 }
 
-func (s *Socket) heartbeat() {
+// setHeartbeatRef records the Ref of the pending heartbeat, unless the heartbeat goroutine owning hbClose has
+// been stopped in the meantime.
+func (s *Socket) setHeartbeatRef(hbClose chan any, ref Ref) {
+	s.hbMu.Lock()
+	defer s.hbMu.Unlock()
+
+	if s.hbClose == hbClose {
+		s.hbRef = ref
+	}
+}
+
+// heartbeat runs for one connection. It only uses the channels it was started with, so a reconnect that starts
+// the next heartbeat goroutine does not affect this one.
+func (s *Socket) heartbeat(hbClose chan any, hbMsg chan *Message) {
 	s.Logger.Println(LogDebug, "heartbeat", "heartbeat goroutine started")
 
 	defer func() {
 		s.Logger.Println(LogDebug, "heartbeat", "heartbeat goroutine stopped")
 	}()
 
-	s.hbRef = 0
+	var pendingRef Ref
 
 	for {
 		timer := time.NewTimer(s.HeartbeatInterval)
 
 		select {
-		case <-s.hbClose:
+		case <-hbClose:
 			timer.Stop()
 			return
-		case msg := <-s.hbMsg:
+		case msg := <-hbMsg:
 			s.Logger.Println(LogDebug, "heartbeat", "Got heartbeat message", msg)
 			timer.Stop()
-			s.hbRef = 0
+			pendingRef = 0
+			s.setHeartbeatRef(hbClose, 0)
 		case <-timer.C:
 			if !s.Transport.IsConnected() {
 				continue
 			}
-			if s.hbRef == 0 {
-				s.hbRef = s.MakeRef()
-				s.Logger.Println(LogDebug, "heartbeat", "Sending heartbeat", s.hbRef)
-				err := s.PushMessage(Message{Topic: "phoenix", Event: string(HeartBeatEvent), Payload: nil, Ref: s.hbRef})
+			if pendingRef == 0 {
+				pendingRef = s.MakeRef()
+				s.setHeartbeatRef(hbClose, pendingRef)
+				s.Logger.Println(LogDebug, "heartbeat", "Sending heartbeat", pendingRef)
+				err := s.PushMessage(Message{Topic: "phoenix", Event: string(HeartBeatEvent), Payload: nil, Ref: pendingRef})
 				if err != nil {
 					s.Logger.Println(LogError, "heartbeat", "Error when sending heartbeat", err)
 				}
