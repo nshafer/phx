@@ -82,9 +82,11 @@ func NewChannel(topic string, params map[string]string, socket *Socket) *Channel
 		}
 	}))
 	c.socketCallbacks = append(c.socketCallbacks, socket.OnError(func(err error) {
-		c.setState(ChannelErrored)
-		c.trigger(string(ErrorEvent), 0, nil)
 		c.rejoinTimer.Reset()
+		if c.IsJoined() || c.IsJoining() {
+			c.setState(ChannelErrored)
+			c.trigger(string(ErrorEvent), 0, nil)
+		}
 	}))
 
 	// Add this channel to the socket's open channel
@@ -109,8 +111,21 @@ func (c *Channel) Join() (*Push, error) {
 		return nil, fmt.Errorf("cannot join before connecting the socket")
 	}
 
+	// Set the join push and the joining state in one step, so the socket's OnOpen hook cannot rejoin in between.
 	joinPush := NewPush(c, string(JoinEvent), c.params, c.PushTimeout)
-	c.setJoinPush(joinPush)
+	c.mu.Lock()
+	// Repeat the check under the lock, in case another goroutine joined since the check above.
+	switch c.state {
+	case ChannelJoined:
+		c.mu.Unlock()
+		return nil, fmt.Errorf("already joined")
+	case ChannelJoining:
+		c.mu.Unlock()
+		return nil, fmt.Errorf("join already in progress")
+	}
+	c.joinPush = joinPush
+	c.state = ChannelJoining
+	c.mu.Unlock()
 	joinPush.Receive("ok", func(response any) {
 		c.socket.Logger.Printf(LogInfo, "channel", "joined channel '%v' joinRef:%v", c.topic, c.JoinRef())
 		c.setState(ChannelJoined)
@@ -135,7 +150,6 @@ func (c *Channel) Join() (*Push, error) {
 		c.rejoinTimer.Run()
 	})
 
-	c.setState(ChannelJoining)
 	err := joinPush.Send()
 	if err != nil {
 		return nil, err
@@ -291,19 +305,25 @@ func (c *Channel) Clear(event string) {
 
 // rejoin is a callback for the rejoinTimer, and shouldn't be called directly. It runs in a separate goroutine.
 func (c *Channel) rejoin() {
-	if c.IsRemoved() || c.IsJoined() || c.IsJoining() || c.IsLeaving() {
-		return
-	}
-
 	if !c.socket.IsConnected() {
 		return
 	}
 
-	push := c.getJoinPush()
+	// Check the state and switch to joining in one step, so a concurrent Join or rejoin does not send the join push a
+	// second time.
+	c.mu.Lock()
+	if c.state != ChannelErrored && c.state != ChannelClosed {
+		c.mu.Unlock()
+		return
+	}
+	push := c.joinPush
 	if push == nil {
+		c.mu.Unlock()
 		c.socket.Logger.Println(LogWarning, "channel", "rejoin called before joinPush created!")
 		return
 	}
+	c.state = ChannelJoining
+	c.mu.Unlock()
 
 	c.socket.Logger.Println(LogInfo, "channel", "attempting to rejoin channel")
 	err := push.Send()
@@ -348,20 +368,6 @@ func (c *Channel) trigger(event string, ref Ref, payload any) {
 			go binding.callback(payload)
 		}
 	}
-}
-
-func (c *Channel) setJoinPush(push *Push) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.joinPush = push
-}
-
-func (c *Channel) getJoinPush() *Push {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	return c.joinPush
 }
 
 // Topic returns the topic for this channel
