@@ -80,56 +80,98 @@ func (s *joinCountServer) joinCount(topic string) int {
 	return s.joins[topic]
 }
 
-// TestJoinAfterFailedDialSendsOneJoin covers a channel that was never joined when the socket's first dial fails, and
-// that the caller joins as soon as the connection opens. The failed dial must not mark the channel errored, or the
-// channel's own OnOpen hook rejoins it at the same moment and the server receives the same phx_join twice.
+// failedDialScenario starts a socket whose first dial fails, with a channel that was never joined. The caller joins as
+// soon as the connection opens. It calls afterFailedDial once the failed dial was reported and the channel's own
+// socket OnError hook had time to run, and afterJoin once the join was acknowledged.
+func failedDialScenario(t *testing.T, topic string, afterFailedDial func(*Channel), afterJoin func(*joinCountServer)) {
+	t.Helper()
+	server := newJoinCountServer(t)
+
+	socket := NewSocket(server.URL())
+	ws := NewWebsocket(socket)
+	ws.Dialer = &websocket.Dialer{}
+	socket.Transport = ws
+	socket.ConnectTimeout = 2 * time.Second
+	// Hold the transport's retry after the first failed dial until the server is up.
+	retry := make(chan struct{})
+	socket.ReconnectAfterFunc = func(int) time.Duration {
+		<-retry
+		return 0
+	}
+
+	channel := NewChannel(topic, nil, socket)
+	joinErr := make(chan error, 1)
+	socket.OnOpen(func() {
+		_, err := channel.Join()
+		joinErr <- err
+	})
+	var dialErrors int32
+	socket.OnError(func(error) { atomic.AddInt32(&dialErrors, 1) })
+
+	if err := socket.Connect(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = socket.Disconnect() }()
+	eventually(t, 5*time.Second, "failed dial reported", func() bool {
+		return atomic.LoadInt32(&dialErrors) > 0
+	})
+	time.Sleep(20 * time.Millisecond) // let the channel's own socket OnError hook run
+	afterFailedDial(channel)
+
+	server.up.Store(true)
+	close(retry)
+	if err := <-joinErr; err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	eventually(t, 5*time.Second, "channel joined", channel.IsJoined)
+	time.Sleep(20 * time.Millisecond) // a duplicate join goes out at the same moment as the first
+	afterJoin(server)
+}
+
+// TestFailedDialKeepsNeverJoinedChannelClosed checks the state change: a failed dial is no error of a channel that
+// was never joined. It stays closed and fires no OnError, matching phoenix.js and the socket's OnClose hook.
+func TestFailedDialKeepsNeverJoinedChannelClosed(t *testing.T) {
+	for i := 0; i < 10; i++ {
+		failedDialScenario(t, "room:lobby", func(channel *Channel) {
+			if state := channel.State(); state != ChannelClosed {
+				t.Fatalf("iteration %d: never-joined channel is %v after a failed dial, want %v", i, state, ChannelClosed)
+			}
+		}, func(*joinCountServer) {})
+	}
+}
+
+// TestJoinAfterFailedDialSendsOneJoin counts the phx_join frames the server receives. It deliberately has no
+// assertion on the channel state after the failed dial. With the old OnError hook the channel is errored and its own
+// OnOpen hook rejoins it at the same moment as the caller's Join. Both sends race, so the duplicate is probabilistic
+// (about 1-3 of 30 runs fail against the old code), but a failure here is always a duplicate phx_join.
 func TestJoinAfterFailedDialSendsOneJoin(t *testing.T) {
 	const topic = "room:lobby"
 	for i := 0; i < 10; i++ {
-		server := newJoinCountServer(t)
-
-		socket := NewSocket(server.URL())
-		ws := NewWebsocket(socket)
-		ws.Dialer = &websocket.Dialer{}
-		socket.Transport = ws
-		socket.ConnectTimeout = 2 * time.Second
-		// Hold the transport's retry after the first failed dial until the server is up.
-		retry := make(chan struct{})
-		socket.ReconnectAfterFunc = func(int) time.Duration {
-			<-retry
-			return 0
-		}
-
-		channel := NewChannel(topic, nil, socket)
-		joinErr := make(chan error, 1)
-		socket.OnOpen(func() {
-			_, err := channel.Join()
-			joinErr <- err
+		failedDialScenario(t, topic, func(*Channel) {}, func(server *joinCountServer) {
+			if n := server.joinCount(topic); n != 1 {
+				t.Fatalf("iteration %d: server received %d phx_join for %q, want 1", i, n, topic)
+			}
 		})
-		var dialErrors int32
-		socket.OnError(func(error) { atomic.AddInt32(&dialErrors, 1) })
+	}
+}
 
-		if err := socket.Connect(); err != nil {
-			t.Fatal(err)
+// TestJoinErrorOrder checks that a channel that is already joined or joining reports that, also when the socket is
+// not connected, rather than the missing connection.
+func TestJoinErrorOrder(t *testing.T) {
+	u, _ := url.Parse("ws://127.0.0.1:1/socket")
+	for _, tc := range []struct {
+		state ChannelState
+		want  string
+	}{
+		{ChannelJoined, "already joined"},
+		{ChannelJoining, "join already in progress"},
+		{ChannelClosed, "cannot join before connecting the socket"},
+	} {
+		channel := NewChannel("room:lobby", nil, NewSocket(u))
+		channel.setState(tc.state)
+		_, err := channel.Join()
+		if err == nil || err.Error() != tc.want {
+			t.Errorf("state %v on a disconnected socket: Join error = %v, want %q", tc.state, err, tc.want)
 		}
-		eventually(t, 5*time.Second, "failed dial reported", func() bool {
-			return atomic.LoadInt32(&dialErrors) > 0
-		})
-		time.Sleep(20 * time.Millisecond) // let the channel's own socket OnError hook run
-		if state := channel.State(); state != ChannelClosed {
-			t.Fatalf("iteration %d: never-joined channel is %v after a failed dial, want %v", i, state, ChannelClosed)
-		}
-
-		server.up.Store(true)
-		close(retry)
-		if err := <-joinErr; err != nil {
-			t.Fatalf("iteration %d: Join: %v", i, err)
-		}
-		eventually(t, 5*time.Second, "channel joined", channel.IsJoined)
-		time.Sleep(20 * time.Millisecond) // a duplicate join goes out at the same moment as the first
-		if n := server.joinCount(topic); n != 1 {
-			t.Fatalf("iteration %d: server received %d phx_join for %q, want 1", i, n, topic)
-		}
-		_ = socket.Disconnect()
 	}
 }
