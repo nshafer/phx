@@ -9,6 +9,8 @@ import (
 // processing their replies (a missing reply makes the socket reconnect). Run with -race: every reconnect stops the
 // heartbeat goroutine of the previous connection and starts a new one while the reader goroutine routes heartbeat
 // replies to it.
+//
+// Note: without -race this test passes on the unfixed code too; the race detector is what catches the bug.
 func TestHeartbeatSurvivesReconnects(t *testing.T) {
 	server := newTestServer(t)
 	socket := newTestSocket(t, server)
