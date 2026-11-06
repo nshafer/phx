@@ -131,9 +131,10 @@ func (w *Websocket) startup() {
 	w.connectionTries = 0
 
 	w.done = make(chan any)
-	w.close = make(chan bool)
+	// close and reconnect carry at most one pending request each and are never sent to blockingly, see signal.
+	w.close = make(chan bool, 1)
 	w.closeMsg = make(chan bool)
-	w.reconnect = make(chan bool)
+	w.reconnect = make(chan bool, 1)
 	w.send = make(chan []byte, messageQueueLength)
 
 	w.setReconnecting(false)
@@ -207,7 +208,6 @@ func (w *Websocket) closeConn() {
 	}
 
 	w.Handler.onConnClose()
-	w.setClosing(false)
 }
 
 func (w *Websocket) writeToConn(data []byte) error {
@@ -265,7 +265,10 @@ func (w *Websocket) connectionManager() {
 		case <-w.done:
 			return
 		case <-w.close:
-			w.closeConn()
+			// The connection may already be gone when Disconnect raced a reconnect, which then closed it.
+			if w.connIsSet() {
+				w.closeConn()
+			}
 			w.shutdown()
 		case <-w.reconnect:
 			w.closeConn()
@@ -393,7 +396,7 @@ func (w *Websocket) sendClose() {
 	}
 
 	w.closing = true
-	w.close <- true
+	signal(w.close)
 }
 
 func (w *Websocket) setReconnecting(reconnecting bool) {
@@ -419,7 +422,17 @@ func (w *Websocket) sendReconnect() {
 	}
 
 	w.reconnecting = true
-	w.reconnect <- true
+	signal(w.reconnect)
+}
+
+// signal queues a request for the connectionManager without blocking. The callers hold w.mu, which the
+// connectionManager may itself be waiting for, so a blocking send here could deadlock. If a request is already
+// pending, the manager has yet to act on it and the new one is redundant.
+func signal(ch chan bool) {
+	select {
+	case ch <- true:
+	default:
+	}
 }
 
 func (w *Websocket) setConn(conn *websocket.Conn) {
