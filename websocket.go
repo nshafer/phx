@@ -238,6 +238,10 @@ func (w *Websocket) connectionManager() {
 	//fmt.Println("connectionManager started")
 	//defer fmt.Println("connectionManager stopped")
 
+	// closedByReconnect is set when a reconnect has closed the connection and no new one has been dialed since. A
+	// Disconnect that arrived during that reconnect must not close (and report closing) the same connection again.
+	closedByReconnect := false
+
 	for {
 		// Check if we have been told to finish
 		select {
@@ -259,19 +263,20 @@ func (w *Websocket) connectionManager() {
 				}
 				continue
 			}
+			closedByReconnect = false
 		}
 
 		select {
 		case <-w.done:
 			return
 		case <-w.close:
-			// The connection may already be gone when Disconnect raced a reconnect, which then closed it.
-			if w.connIsSet() {
+			if !closedByReconnect {
 				w.closeConn()
 			}
 			w.shutdown()
 		case <-w.reconnect:
 			w.closeConn()
+			closedByReconnect = true
 		}
 	}
 }
