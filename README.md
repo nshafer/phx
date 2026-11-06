@@ -34,7 +34,8 @@ Please see [Releases](https://github.com/nshafer/phx/releases) on Github.
 - All event handlers are simple functions that are registered with the Socket, Channels or Pushes. No complicated
   interfaces to implement.
 - Completely concurrent using many goroutines in the background so that your main thread is not blocked. All callbacks
-  will run in separate goroutines.
+  will run in separate goroutines, unless a Channel's `OrderedCallbacks` is set: then its event callbacks run one at a
+  time, in the order the events arrived.
 - Supports setting connection parameters, headers, proxy, etc on the main websocket connection.
 - Supports passing parameters when joining a Channel
 - Pluggable Transport, TransportHandler, Logger if needed.

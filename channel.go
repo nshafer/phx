@@ -21,6 +21,13 @@ type Channel struct {
 	// RejoinAfterFunc is a function that returns the duration to wait before rejoining based on given tries
 	RejoinAfterFunc func(tries int) time.Duration
 
+	// OrderedCallbacks makes the callbacks registered with On, OnJoin, OnClose and OnError run one at a time, in
+	// the order their events arrived, instead of each in its own goroutine. They run on a goroutine of this Channel,
+	// so a slow callback delays only later events of this Channel; hand long work to a goroutine of your own.
+	// Replies to pushes are not queued behind these callbacks, so a callback may push and wait for the reply.
+	// Set it before calling Join.
+	OrderedCallbacks bool
+
 	// private
 	topic           string
 	params          map[string]string
@@ -32,6 +39,11 @@ type Channel struct {
 	bindings        map[Ref]*channelBinding
 	rejoinTimer     *callbackTimer
 	socketCallbacks []Ref
+
+	// callback queue for OrderedCallbacks
+	queueMu      sync.Mutex
+	queue        []func()
+	queueRunning bool
 }
 
 // NewChannel creates a new Channel attached to the Socket. If there is already a Channel for the given topic, that
@@ -345,8 +357,43 @@ func (c *Channel) trigger(event string, ref Ref, payload any) {
 	// For a given channelBinding to get called it must match the event and either have ref == 0 or match the ref
 	for _, binding := range c.bindings {
 		if binding.event == event && (binding.ref == 0 || binding.ref == ref) {
-			go binding.callback(payload)
+			if c.OrderedCallbacks && binding.ref == 0 {
+				callback := binding.callback
+				c.enqueue(func() { callback(payload) })
+			} else {
+				go binding.callback(payload)
+			}
 		}
+	}
+}
+
+// enqueue adds fn to the Channel's callback queue, starting a goroutine to work through the queue unless one is
+// already doing so. That goroutine exits once the queue is empty.
+func (c *Channel) enqueue(fn func()) {
+	c.queueMu.Lock()
+	defer c.queueMu.Unlock()
+
+	c.queue = append(c.queue, fn)
+	if !c.queueRunning {
+		c.queueRunning = true
+		go c.runQueue()
+	}
+}
+
+func (c *Channel) runQueue() {
+	for {
+		c.queueMu.Lock()
+		if len(c.queue) == 0 {
+			c.queueRunning = false
+			c.queueMu.Unlock()
+			return
+		}
+		fn := c.queue[0]
+		c.queue[0] = nil
+		c.queue = c.queue[1:]
+		c.queueMu.Unlock()
+
+		fn()
 	}
 }
 
