@@ -180,12 +180,12 @@ func (w *Websocket) dial() error {
 func (w *Websocket) closeConn() {
 	//fmt.Println("closeConn")
 
-	if w.connIsSet() {
+	if conn := w.getConn(); conn != nil {
 		// attempt to gracefully close the connection by sending a close websocket message
 		data := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")
 		deadline := time.Now().Add(2 * time.Second)
 		w.setWaitingForClose(true)
-		err := w.conn.WriteControl(websocket.CloseMessage, data, deadline)
+		err := conn.WriteControl(websocket.CloseMessage, data, deadline)
 		if err == nil {
 			// Wait for a close message to be received by `connectionReader`, or time out after 2 seconds
 			w.setWaitingForClose(true)
@@ -197,8 +197,9 @@ func (w *Websocket) closeConn() {
 		w.setWaitingForClose(false)
 	}
 
-	if w.connIsSet() {
-		err := w.conn.Close()
+	// The reader may have dropped the connection while we waited, so look again.
+	if conn := w.getConn(); conn != nil {
+		err := conn.Close()
 		if err != nil {
 			w.Handler.onConnError(err)
 		}
@@ -211,19 +212,21 @@ func (w *Websocket) closeConn() {
 }
 
 func (w *Websocket) writeToConn(data []byte) error {
-	if !w.connIsReady() {
+	conn := w.readyConn()
+	if conn == nil {
 		return errors.New("connection is not open")
 	}
 
-	return w.conn.WriteMessage(websocket.TextMessage, data)
+	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
 func (w *Websocket) readFromConn() ([]byte, error) {
-	if !w.connIsReady() {
+	conn := w.readyConn()
+	if conn == nil {
 		return nil, errors.New("connection is not open")
 	}
 
-	messageType, data, err := w.conn.ReadMessage()
+	messageType, data, err := conn.ReadMessage()
 	if err != nil {
 		return nil, err
 	}
@@ -427,6 +430,27 @@ func (w *Websocket) setConn(conn *websocket.Conn) {
 	defer w.mu.Unlock()
 
 	w.conn = conn
+}
+
+// getConn returns the current connection, or nil. The connection is read under the mutex, but used outside it:
+// reads and writes on it block, and must not hold up the other goroutines. gorilla/websocket allows one reader and
+// one writer at a time, plus Close and WriteControl from any goroutine.
+func (w *Websocket) getConn() *websocket.Conn {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	return w.conn
+}
+
+// readyConn returns the current connection if it is ready for use (see connIsReady), or nil.
+func (w *Websocket) readyConn() *websocket.Conn {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	if !w.started || w.closing || w.reconnecting {
+		return nil
+	}
+	return w.conn
 }
 
 func (w *Websocket) connIsSet() bool {
