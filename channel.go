@@ -371,11 +371,9 @@ func (c *Channel) Topic() string {
 
 // JoinRef returns the JoinRef for this channel, which is the Ref of the Push returned by Join
 func (c *Channel) JoinRef() Ref {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if c.joinPush != nil {
-		return c.joinPush.Ref
+	push := c.getJoinPush()
+	if push != nil {
+		return push.ref()
 	} else {
 		return 0
 	}
