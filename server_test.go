@@ -1,3 +1,7 @@
+// This file is the shared test helper of a series of independent fixes (Disconnect deadlock, push reply binding
+// race, heartbeat race, ordered channel callbacks). It is kept identical on every branch of the series so they merge
+// cleanly in any order, so a branch may leave some helpers (heartbeatCount, setSilent, ...) unused.
+
 package phx
 
 import (
