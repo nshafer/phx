@@ -48,23 +48,13 @@ func NewPush(channel *Channel, event string, payload any, timeout time.Duration)
 
 // Send will actually push the event to the server.
 func (p *Push) Send() error {
-	p.reset()
-	p.Ref = p.channel.socket.MakeRef()
-	p.timeoutTimer = time.AfterFunc(p.Timeout, p.timeout)
+	p.mu.Lock()
+	p.resetLocked()
+	ref := p.channel.socket.MakeRef()
+	p.Ref = ref
 
-	err := p.channel.socket.PushMessage(Message{
-		Topic:   p.channel.topic,
-		Event:   p.Event,
-		Payload: p.Payload,
-		Ref:     p.Ref,
-		JoinRef: p.channel.JoinRef(),
-	})
-	if err != nil {
-		return err
-	}
-	p.sent = true
-
-	p.bindingRef = p.channel.OnRef(p.Ref, string(ReplyEvent), func(payload any) {
+	// Bind for the reply before the message goes out: the reply can be processed before PushMessage returns.
+	bindingRef := p.channel.OnRef(ref, string(ReplyEvent), func(payload any) {
 		// This runs in the Transports goroutine
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -74,12 +64,44 @@ func (p *Push) Send() error {
 		p.reply = payload
 		p.callCallbacks(payload)
 	})
+	p.bindingRef = bindingRef
+	p.timeoutTimer = time.AfterFunc(p.Timeout, p.timeout)
+	p.mu.Unlock()
+
+	// Not under p.mu: JoinRef reads the Ref of the channel's join push, which may be this push.
+	err := p.channel.socket.PushMessage(Message{
+		Topic:   p.channel.topic,
+		Event:   p.Event,
+		Payload: p.Payload,
+		Ref:     ref,
+		JoinRef: p.channel.JoinRef(),
+	})
+	if err != nil {
+		// Nothing was sent, so no reply will come for this binding.
+		p.channel.Off(bindingRef)
+		return err
+	}
+
+	p.mu.Lock()
+	p.sent = true
+	p.mu.Unlock()
 
 	return nil
 }
 
 func (p *Push) IsSent() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
 	return p.sent
+}
+
+// ref returns the Ref of the last Send, synchronised with Send.
+func (p *Push) ref() Ref {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	return p.Ref
 }
 
 // Receive registers the given event handler for the given status.
@@ -88,17 +110,18 @@ func (p *Push) IsSent() bool {
 // If a custom event handler (handle_in/3) does not reply (returns :noreply) then the only events that will trigger
 // here are "error" and "timeout".
 func (p *Push) Receive(status string, callback pushCallback) {
+	p.mu.Lock()
 	if p.reply != nil {
 		replyStatus, replyResponse, ok := p.deconstructPayload(p.reply)
 		if ok && replyStatus == status {
+			p.mu.Unlock()
 			callback(replyResponse)
 			return
 		}
 	}
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.callbacks = append(p.callbacks, &pushBinding{status: status, callback: callback})
+	p.mu.Unlock()
 }
 
 func (p *Push) callCallbacks(payload any) {
@@ -154,6 +177,13 @@ func (p *Push) timeout() {
 
 // reset this push so that it will no longer timeout and won't process messages from the server.
 func (p *Push) reset() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.resetLocked()
+}
+
+func (p *Push) resetLocked() {
 	p.cancelTimeout()
 	if p.bindingRef != 0 {
 		p.channel.Off(p.bindingRef)
