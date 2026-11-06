@@ -2,6 +2,7 @@ package phx
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -10,6 +11,7 @@ type channelBinding struct {
 	ref      Ref
 	event    string
 	callback func(payload any)
+	internal bool // the Channel's own handler, never queued by OrderedCallbacks
 }
 
 // A Channel is a unique connection to the given Topic on the server. You can have many Channels connected over one
@@ -21,11 +23,16 @@ type Channel struct {
 	// RejoinAfterFunc is a function that returns the duration to wait before rejoining based on given tries
 	RejoinAfterFunc func(tries int) time.Duration
 
-	// OrderedCallbacks makes the callbacks registered with On, OnJoin, OnClose and OnError run one at a time, in
-	// the order their events arrived, instead of each in its own goroutine. They run on a goroutine of this Channel,
-	// so a slow callback delays only later events of this Channel; hand long work to a goroutine of your own.
-	// Replies to pushes are not queued behind these callbacks, so a callback may push and wait for the reply.
-	// Set it before calling Join.
+	// OrderedCallbacks makes the callbacks registered with On, OnJoin, OnClose and OnError run one at a time on a
+	// goroutine of this Channel, instead of each in its own goroutine. Callbacks for messages the server sends on
+	// this Channel's topic run in the order the messages arrived, and several callbacks for one event run in the
+	// order they were registered. Not ordered relative to those messages are the lifecycle events this client
+	// raises itself (OnJoin, OnClose after Leave, OnError after a socket error or close): they are queued when they
+	// happen, so for example OnJoin may run after the Channel's first broadcast.
+	//
+	// A slow callback delays only later callbacks of this Channel; hand long work to a goroutine of your own. The
+	// Channel's own state handling and rejoin, and replies to pushes, are never queued behind these callbacks, so a
+	// callback may push and wait for the reply. Set it before calling Join.
 	OrderedCallbacks bool
 
 	// private
@@ -68,13 +75,13 @@ func NewChannel(topic string, params map[string]string, socket *Socket) *Channel
 
 	c.rejoinTimer = newCallbackTimer(c.rejoin, c.RejoinAfterFunc)
 
-	c.OnClose(func(payload any) {
+	c.onInternal(string(CloseEvent), func(payload any) {
 		c.socket.Logger.Printf(LogInfo, "channel", "Channel '%v' closed. joinRef: %v", c.topic, c.JoinRef())
 		c.setState(ChannelClosed)
 		c.rejoinTimer.Reset()
 	})
 
-	c.OnError(func(payload any) {
+	c.onInternal(string(ErrorEvent), func(payload any) {
 		c.socket.Logger.Printf(LogError, "channel", "Channel '%v' error: %+v", c.topic, payload)
 		c.setState(ChannelErrored)
 		c.rejoinTimer.Run()
@@ -262,6 +269,20 @@ func (c *Channel) OnRef(ref Ref, event string, callback func(payload any)) (bind
 	return
 }
 
+// onInternal registers one of the Channel's own handlers, which OrderedCallbacks never queues.
+func (c *Channel) onInternal(event string, callback func(payload any)) {
+	bindingRef := c.refGenerator.nextRef()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.bindings[bindingRef] = &channelBinding{
+		event:    event,
+		callback: callback,
+		internal: true,
+	}
+}
+
 // OnJoin will register the given callback for whenever this Channel joins successfully to the server.
 // Returns a unique Ref that can be used to cancel this callback via Off.
 func (c *Channel) OnJoin(callback func(payload any)) (bindingRef Ref) {
@@ -355,15 +376,22 @@ func (c *Channel) trigger(event string, ref Ref, payload any) {
 	defer c.mu.RUnlock()
 
 	// For a given channelBinding to get called it must match the event and either have ref == 0 or match the ref
-	for _, binding := range c.bindings {
+	var queued []Ref
+	for bindingRef, binding := range c.bindings {
 		if binding.event == event && (binding.ref == 0 || binding.ref == ref) {
-			if c.OrderedCallbacks && binding.ref == 0 {
-				callback := binding.callback
-				c.enqueue(func() { callback(payload) })
+			if c.OrderedCallbacks && binding.ref == 0 && !binding.internal {
+				queued = append(queued, bindingRef)
 			} else {
 				go binding.callback(payload)
 			}
 		}
+	}
+
+	// Binding refs increase, so this is registration order.
+	sort.Slice(queued, func(i, j int) bool { return queued[i] < queued[j] })
+	for _, bindingRef := range queued {
+		callback := c.bindings[bindingRef].callback
+		c.enqueue(func() { callback(payload) })
 	}
 }
 

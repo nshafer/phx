@@ -156,3 +156,63 @@ func TestOrderedCallbackCanWaitForPushReply(t *testing.T) {
 		t.Fatal("handler never saw the reply to its push")
 	}
 }
+
+// TestOrderedCallbacksDoNotDelayChannelStateHandling: the Channel's own handling of phx_error (state change, rejoin
+// timer) is not queued behind user callbacks, so a slow handler does not hold up error handling and rejoin.
+func TestOrderedCallbacksDoNotDelayChannelStateHandling(t *testing.T) {
+	server := newTestServer(t)
+	socket := newTestSocket(t, server)
+	channel := socket.Channel("room:1", nil)
+	channel.OrderedCallbacks = true
+
+	release := make(chan struct{})
+	defer close(release)
+	channel.On("work", func(any) { <-release })
+
+	conn := joinTestChannel(t, server, socket, channel)
+	_ = conn.send(testFrame{Topic: "room:1", Event: "work", Payload: map[string]any{}})
+	_ = conn.send(testFrame{Topic: "room:1", Event: string(ErrorEvent), Payload: map[string]any{}})
+
+	eventually(t, 3*time.Second, "channel errored while a user handler is still running", channel.IsErrored)
+}
+
+// TestOrderedCallbacksOfOneEventRunInRegistrationOrder: several callbacks bound to the same event run in the order
+// they were registered.
+func TestOrderedCallbacksOfOneEventRunInRegistrationOrder(t *testing.T) {
+	server := newTestServer(t)
+	socket := newTestSocket(t, server)
+	channel := socket.Channel("room:1", nil)
+	channel.OrderedCallbacks = true
+
+	const callbacks = 20
+	var mu sync.Mutex
+	var got []int
+	done := make(chan struct{})
+	for i := 0; i < callbacks; i++ {
+		i := i
+		channel.On("multi", func(any) {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, i)
+			if len(got) == callbacks {
+				close(done)
+			}
+		})
+	}
+
+	conn := joinTestChannel(t, server, socket, channel)
+	_ = conn.send(testFrame{Topic: "room:1", Event: "multi", Payload: map[string]any{}})
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("not all callbacks ran")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for i, n := range got {
+		if n != i {
+			t.Fatalf("callbacks ran in order %v, want registration order", got)
+		}
+	}
+}
